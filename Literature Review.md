@@ -5,7 +5,15 @@
 - Altman, 1974  
 
 ### En cours de lecture
-- Ayash et al., 2023 (sur le drive: articulate, 2016)
+- Ayash et al., 2023 (sur le drive: articulate, 2016) $\rightarrow$ Loan
+- Shumway, 2001 $\rightarrow$ Nathan
+
+### Reste à lire
+- Campbell, 2008
+- Chava, 2004
+- Bardos, 2007
+- Bondscore, 2004
+- Moodys, 2000
 
 ---
 
