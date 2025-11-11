@@ -16,7 +16,7 @@ where X1 = Working capital/Total assets $\rightarrow$ measure of the net liquid 
 Working capital = current asset - current liabilities
 X2 = Retained Earnings/Total assets $\rightarrow$ cumulative profitability over time ; young company will have a small re/ta ratio (no time to have cumulated a lot of profits)
 X3 = Earnings before interest and taxes/Total assets $\rightarrow$ measure of the true productivity of the company / profitability of a firm
-X4 = Market value equity/Book value of total debt $\rigtarrow$ how much the firm's assets can decline in value before the the company becomes insolvent + add a market value that other studies don't have (more efficient than Net worth / Total debt)
+X4 = Market value equity/Book value of total debt $\rightarrow$ how much the firm's assets can decline in value before the the company becomes insolvent + add a market value that other studies don't have (more efficient than Net worth / Total debt)
 X5 = Sales/Total assets $\rightarrow$ measure of management's capability in dealing with competitive conditions ; not significant alone but it is with the other ratios
 Z = Overall Index ; greater firm's bankruptcy potential = lower discriminant score (Z)
 
