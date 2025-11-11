@@ -4,10 +4,8 @@
 - Altman, 1968  
 - Altman, 1974  
 
----
-
 ### En cours de lecture
-- 
+- Ayash et al., 2023 (sur le drive: articulate, 2016)
 
 ---
 
