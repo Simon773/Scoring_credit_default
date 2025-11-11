@@ -1,10 +1,14 @@
 ---
-Articles lus:
-- Altman, 1968
-- Altman, 1974
+
+### Articles lus
+- Altman, 1968  
+- Altman, 1974  
+
 ---
-En cours de lecture :
+
+### En cours de lecture
 - 
+
 ---
 
 ## Altman, 1968
