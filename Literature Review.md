@@ -1,3 +1,10 @@
+---
+output:
+  html_document:
+    toc: TRUE #
+    toc_depth: 5 #
+---
+
 ## Altman, 1968
 Financial ratios, discriminant analysis and the prediction of corporate bankruptcy
 
