@@ -41,3 +41,37 @@ Threshold value: 2.675 (chosen by looking at the misclassified companies, $\appr
 
 - MDA model can not be used for credit evaluation as it does not take important variables for this sector (purpose of the loan, its maturity, security involved, deposity status...)
 - internal control considerations: the criteria can be used to anticipate difficulties
+
+## Altman, 1974
+Obj: model to determine the credit worthiness of commercial loan applicants
+Data: industrial sector (cotton and wool textile sector), France
+35 problem firms, 99 good firms, 1968-1971 period ; 41 financial ratios
+
+#### 1 - Univariate analysis
+Mean, variance, distribution of each ratio to identify the most relevant one and potential correlations
+Activity ratios: more data = stronger company
+
+#### - PCA
+ACP to reduce number of ratios
+F2 = relative importance of investment in the firms
+F1 = relative importance of margins (or cash flows but independently of F2)
+
+#### - Discriminant analysis
+Create a variable which is the linear combinaison of all ratios
+Allows to create a score for each company
+
+Model with 41 ratios : good for one year predictions
+Interpretation: higher correlations between initial ratios and new variable (ratios 34 (0.59), 33 (0.56), 12 (0.49), 30, 31, and 32 (0.42), 8 (-.40), and 3, 4, 9, 13, 35, 36, and 39 (all between 0.34 and 0.37). In addition, ratio 24 displayed a rather high negative correlation here.)
+
+Reduced model: add a third dimension to PCA to find the "important" ratios
+Ten-ratio model: most efficient indicators in the first model and in the second method (8, 9, 10, 12, 15, 17, 20, 23, 24, 33)
+Discriminative strength = 0.62
+
+#### - Interpretation and Conclusion
+Bad firms tend to have higher leverage, lower profitability,
+and lower contributions to the firms' value-added productivity.
+
+Most financial ratios can discriminate, using their mean values
+Better model with more ratios but more handable with less
+
+Page 17 of this article: name of all ratios
