@@ -200,3 +200,19 @@ Why ?
 
 -   missing values (16.3% of firm-year observations)
 
+
+## Shumway 2001
+
+Abstract: Traditional bankruptcy models are biased because they ignore time and selection issues. He proposes a discrete-time hazard model that uses firm-year data and time-varying covariates to generate consistent estimates. Empirically, he shows that adding market-based variables substantially improves bankruptcy prediction.
+
+A hazard model predicts the probability that a firm fails at time t conditional on surviving until t.
+
+Data: 
+Firms from 1962–1992 with data available in Compustat and CRSP.
+Variables: Altman (1968) ratios (WC/TA, RE/TA, EBIT/TA, ME/TL, S/TA) and Zmijewski (1984) ratios (NI/TA, TL/TA, CA/CL) + relative size, pPast stock returns, volatility of monthly returns
+
+Results:
+Once bias is removed using the hazard model, only EBIT/TA and ME/TL is significant among Altman variables and NI/TA is significant among Zmijewski variables.
+Market-based variables are powerful predictors: low market size → higher risk, poor past returns → higher risk, high volatility → higher risk
+Combining market variables + two accounting ratios (NI/TA and TL/TA) is the most accurate model
+
