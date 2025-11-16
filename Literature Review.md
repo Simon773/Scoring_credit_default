@@ -2,10 +2,10 @@
 
 ### Articles lus
 - Altman, 1968  
-- Altman, 1974  
+- Altman, 1974
+- Ayash et al., 2023 (sur le drive: articulate, 2016)
 
 ### En cours de lecture
-- Ayash et al., 2023 (sur le drive: articulate, 2016) $\rightarrow$ Loan
 - Shumway, 2001 $\rightarrow$ Nathan
 
 ### Reste à lire
@@ -18,6 +18,7 @@
 ---
 
 ## Altman, 1968
+Synthèse rapide : construction du ratio Altman (quelles variables, pq / interaction ensemble)
 Financial ratios, discriminant analysis and the prediction of corporate bankruptcy
 
 Obj : attempt an assessment of the quality of ratio analysis as an analytical technique
@@ -124,3 +125,78 @@ Most financial ratios can discriminate, using their mean values
 Better model with more ratios but more handable with less
 
 Page 17 of this article: name of all ratios
+
+## Ayash et al., 2023
+Synthèse rapide : comprendre si Compustat respecte les relations entre les différentes balances en finance (la réponse est non mais représente bien les balances)
+Do Compustat Financial Statement Data Actually Articulate ?
+
+Obj: complete the Casey's article (2016) and show that more efficient
+when add two data characteristics (level of the data and understanding
+on the variables (line or calculable))
+
+Compustat: data done to use FSBM (Financial Statement Balancing Model)
+
+-   Majority of the nulls on line item accounts (not calculable amounts)
+
+-   If null at the line item account = 0 at the top-level (eg: inventory
+    null $\rightarrow$ technology firms)
+
+-   Once nulls in top-level line item accounts are resolved, users can
+    solve for the few missing calculable amounts and get to an internal
+    correct dataset
+
+-   Common filters: non-financial firms, US firms, firms with sales or
+    assets \> \$1 million USD and publicly traded
+
+### Literature Review
+
+Articulation's definition (Huefner, 1989) : each balance sheet account
+change must be accounted for when explaining the aggregate change in
+cash
+
+Compustat taken for its integrity but not clear how to manage 0
+$\rightarrow$ need a good understanding of the data
+
+### Articulation model
+
+Understanding of the model of Compustat by the authors (explique comment
+sont calculées les valeurs + toutes les valeurs intermédiaire ; regarder
+les tableaux en annexes pour avoir tous les détails)
+
+-   Top-level income statement : EBITDA, EBIT, nopi, spi xint, txt
+
+-   Sub-level income statement ; la qualité des sous-données varie en
+    fonction du Panel (A ou b) : xi + do = xido (almost always) ; seq =
+    ceq + pstk (idem) but rare examples were sub levels are well
+    populated
+
+-   Top-level balance sheet : assets (at, atc), liabilities (lct, lt),
+    shareholders' equity (seq)
+
+-   Sub-level balance sheet : idem but with more details
+
+-   Top-level cash flow statement : where the income statement ends, the
+    cash flow statement begins, and where the cash flow statement ends,
+    the balance sheet begins
+
+Test the articulation in Compustat data : income statement linked to the
+cash flow statement and change in cash calculated using the 2 most
+recent balance sheets (BS) = change in cash on the cash flow statement
+
+1° others filters : drop the first year of each firm (bc need two BS
+periods)
+
+2° correct missing values
+
+3° test the articulation between each "group" of variables : highly
+accurate in presenting balance sheets (B/S) that balance, income
+statements (I/S) that tie from revenue to net income, and accurate
+statements of cash flows (CF/S) but less adept at generating between
+statement articulation
+
+Why ?
+
+-   linkage can change over time
+
+-   missing values (16.3% of firm-year observations)
+
