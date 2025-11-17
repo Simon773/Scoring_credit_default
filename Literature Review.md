@@ -4,16 +4,16 @@
 - Altman, 1968  
 - Altman, 1974
 - Ayash et al., 2023 (sur le drive: articulate, 2016)
+- Shumway, 2001
 
 ### En cours de lecture
-- Shumway, 2001 $\rightarrow$ Nathan
+- Campbell, 2008 $\rightarrow$ Loan
+- Chava, 2004 $\rightarrow$ Nathan
+- Bardos, 2007 $\rightarrow$ Simon
+- Moodys, 2000 $\rightarrow$ Maëlys
 
 ### Reste à lire
-- Campbell, 2008
-- Chava, 2004
-- Bardos, 2007
 - Bondscore, 2004
-- Moodys, 2000
 
 ---
 
