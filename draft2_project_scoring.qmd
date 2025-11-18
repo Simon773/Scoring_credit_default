@@ -1,0 +1,318 @@
+---
+title: "draft2_project_scoring"
+format: html
+---
+
+Première liaison des BDD
+
+```{r, message=FALSE, warning=FALSE}
+setwd("~/M2/Scoring/Projet/Scoring_credit_default")
+
+library(tidyverse)
+library(readxl)
+```
+
+# Import des BDD compustat et company
+
+1 ligne par entreprise et par année =\> avoir les altman ratio
+
+```{r}
+compustat_all <- readRDS("data/compustat_all.rds") #mettre light pour juste les tests
+```
+
+```{r}
+compustat_variables <-readRDS("data/compustat_funda_variables.rds")
+```
+
+```{r}
+compustat_all %>%
+  select(gvkey, fyear, conm, at, wcap, re, ebit, lt, sale, ni, act, lct) %>%
+  summary()
+```
+
+Créer les ratios
+
+```{r}
+# mutate(WCTA = wcap / at,
+# RETA = re / at,
+# EBTA = ebit / at,
+# TLTA = lt / at, # as a proxy for ME/TL
+# SLTA = sale / at)
+```
+
+#### Test pour rattraper certaines valeurs manquantes : non concluant
+
+```{r}
+total_assets <- compustat_all %>% select(che, rect, invt, aco, act) 
+total_assets$act_2 <- total_assets$che + total_assets$rect + total_assets$invt + total_assets$aco
+total_assets %>% select(act, act_2) %>% summary()
+```
+
+```{r}
+total_liabilities <- compustat_all %>% select(ap, txp, dlc, lco, lct)
+summary(total_liabilities)
+total_liabilities$lct_2 <- total_liabilities$ap + total_liabilities$txp + total_liabilities$dlc + total_liabilities$lco
+total_liabilities %>% select(lct, lct_2) %>% summary()
+```
+
+```{r}
+work_cap <- total_assets$act_2 - total_liabilities$lct_2
+sum(is.na(work_cap))
+```
+
+```{r}
+sum(is.na(compustat_all$wcap))
+```
+
+#### Fin du test
+
+```{r}
+compustat_all_modif <- compustat_all %>%
+  select(gvkey, fyear, conm, at, wcap, re, ebit, lt, sale, lct, act, ni) %>%
+  mutate( wcap2 = act - lct) %>%
+  mutate(WCTA = wcap / at,
+         WCTA2 = wcap2 / at, 
+         RETA = re / at,
+         EBTA = ebit / at,
+         TLTA = lt / at, # as a proxy for ME/TL
+         SLTA = sale / at)
+```
+
+si pas working capital, prendre diff entre current asset et current liabilities
+
+current asset = act current liabilities = lct
+
+```{r}
+compustat_all_modif %>% summary()
+```
+
+1 ligne par entreprise, récupérer les colonnes dlrsn, dldte (date de deletion et raison)
+
+```{r}
+company_all <- readRDS("data/company_all.rds")
+```
+
+```{r}
+company_all_modif <- company_all %>% 
+  select(c("gvkey","conm", "conml", "dldte", "dlrsn", "sic")) %>%
+  mutate(default = ifelse(!is.na(dldte) & dlrsn %in% c("02", "03"), 1, 0)) %>%
+  mutate(sic = as.integer(sic)) %>%
+  mutate(industry = case_when(
+      sic >= 1 & sic <= 999   ~ "Agriculture",
+      sic >= 1000 & sic <= 1499 ~ "Mining",
+      sic >= 1500 & sic <= 1799 ~ "Construction",
+      sic >= 2000 & sic <= 3999 ~ "Manufacturing",
+      sic >= 4000 & sic <= 4899 ~ "Transportation",
+      sic >= 4900 & sic <= 4999 ~ "Utilities",
+      sic >= 5000 & sic <= 5199 ~ "Wholesale",
+      sic >= 5200 & sic <= 5999 ~ "Retail",
+      sic >= 6000 & sic <= 6799 ~ "Finance",
+      sic >= 7000 & sic <= 8999 ~ "Services",
+      sic >= 9000 & sic <= 9999 ~ "Public",
+      TRUE ~ "Missing"
+    ))
+```
+
+Pour crsp, utiliser https://www.tidy-finance.org/r/wrds-crsp-and-compustat.html pour passer de daily en montly
+
+# Join compustat et company
+
+```{r}
+join_cc <- compustat_all_modif %>% left_join(company_all_modif, by=c("gvkey", "conm"))
+```
+
+```{r}
+nrow(compustat_all)
+nrow(join_cc)
+```
+
+# Lopucky
+
+```{r, message = FALSE, warning=FALSE}
+LoPucki <- read_excel("data/Lopucki.xlsx")
+```
+
+```{r}
+LoPucki %>% select(GvkeyBefore, )
+```
+
+```{r}
+LoPucki_clean<-LoPucki%>%
+  select(NameCorp,Chapter,GvkeyBefore,DateFiled)%>%
+  filter(Chapter %in% c('7', '11')) %>%
+  group_by(GvkeyBefore) %>%
+  summarize(DateFiled = min(DateFiled),
+            NameCorp = NameCorp[which.min(DateFiled)],
+            Chapter = Chapter[which.min(DateFiled)]) %>%
+  mutate(DateFiled = lubridate::as_date(DateFiled)) %>%
+  ungroup()
+```
+
+```{r}
+join_ccl <- join_cc %>%
+  left_join(LoPucki_clean, by=c("gvkey"="GvkeyBefore"))
+```
+
+```{r}
+join_ccl <- join_ccl %>%
+  mutate(default2 = ifelse(default == 1 | (!is.na(Chapter) & as.integer(substr(as.character(DateFiled), 1, 4)) == fyear), 1, 0))
+```
+
+```{r}
+join_ccl %>%
+  filter(default==1) %>%
+  count()
+```
+
+```{r}
+join_ccl %>%
+  filter(default2==1) %>%
+  count()
+```
+
+```{r}
+join_ccl%>%
+  filter(default != default2) %>%
+  select(gvkey, conm, fyear, DateFiled, default, default2)
+```
+
+Prendre default2
+
+# Visualisation par industry
+
+```{r}
+
+
+# Calcul des deux indicateurs par industry
+data_plot <- join_ccl %>%
+  group_by(industry) %>%
+  summarise(
+    nb_default = n_distinct(gvkey[default2 == 1]),  # nb d'entreprises ayant fait défaut
+    nb_firms = n_distinct(gvkey)  
+  ) %>%
+  tidyr::pivot_longer(cols = c(nb_default, nb_firms),
+                      names_to = "type",
+                      values_to = "nombre")
+
+# Graphique comparatif
+ggplot(data_plot, aes(x = industry, y = nombre, fill = type)) +
+  geom_col(position = "dodge") +
+  labs(
+    title = "Nombre de défauts et d'entreprises par industrie",
+    x = "Industrie",
+    y = "Nombre",
+    fill = "Type"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+```
+
+```{r}
+data_pct <- join_ccl %>%
+  group_by(industry) %>%
+  summarise(
+    nb_default = n_distinct(gvkey[default2 == 1]),  # nb d'entreprises ayant fait défaut
+    nb_firms = n_distinct(gvkey)                   # nb total d'entreprises uniques
+  ) %>%
+  mutate(pct_default = 100 * (nb_default / nb_firms))
+
+# Graphique
+ggplot(data_pct, aes(x = industry,, y = pct_default)) +
+  geom_col(fill = "tomato") +
+  geom_text(aes(label = sprintf("%.1f%%", pct_default)),
+            vjust = -0.3, size = 3) +
+  labs(
+    title = "Pourcentage de défauts par industrie",
+    x = "Industrie",
+    y = "Taux de défaut (%)"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+# Rajouter Moody's (attention join + compliqué)
+
+En fait les données sont pas sur le drive –\> Si A FAIRE
+
+# Nettoyage BDD
+
+Sélectionner certaines industries
+
+```{r}
+rem_ind <- c("Agriculture", "Finance", "Mining", "Public")
+df_logit <- join_ccl %>% filter(! industry %in% rem_ind)
+nrow(df_logit) != nrow(join_ccl) #doit être TRUE
+nrow(df_logit)
+```
+
+# Visualisations
+
+```{r}
+#par industrie
+data_plot <- df_logit %>%
+  group_by(industry) %>%
+  summarise(
+    nb_default = n_distinct(gvkey[default2 == 1]),  # nb d'entreprises ayant fait défaut
+    nb_firms = n_distinct(gvkey)  
+  ) %>%
+  tidyr::pivot_longer(cols = c(nb_default, nb_firms),
+                      names_to = "type",
+                      values_to = "nombre")
+
+# Graphique comparatif
+ggplot(data_plot, aes(x = industry, y = nombre, fill = type)) +
+  geom_col(position = "dodge") +
+  labs(
+    title = "Nombre de défauts et d'entreprises par industrie",
+    x = "Industrie",
+    y = "Nombre",
+    fill = "Type"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r}
+#nb de faillite par année / % de faillites en fonction du nombre d'entreprises
+
+df_year <- df_logit %>% group_by(fyear) %>% summarise(
+  default2_sum = sum(default2, na.rm = TRUE),
+  nb_firms = n())
+
+df_year <- df_year %>%
+  mutate(pct_faillites = default2_sum / nb_firms * 100)
+
+max_count <- max(df_year$default2_sum, na.rm = TRUE)
+max_pct   <- max(df_year$pct_faillites, na.rm = TRUE)
+mult      <- ifelse(max_pct == 0, 1, max_count / max_pct)
+inv_mult  <- ifelse(max_count == 0, 1, max_pct / max_count)
+
+ggplot(df_year, aes(x = fyear)) +
+  geom_line(aes(y = default2_sum), size = 1, color = "steelblue") +
+  geom_point(aes(y = default2_sum), color = "steelblue") +
+  geom_line(aes(y = pct_faillites * mult), size = 1, linetype = "dashed", color = "firebrick") +
+  geom_point(aes(y = pct_faillites * mult), color = "firebrick") +
+  scale_y_continuous(
+    name = "Nombre de faillites",
+    sec.axis = sec_axis(~ . * inv_mult, name = "Taux de faillite (%)")
+  ) +
+  scale_x_continuous(breaks = df_year$fyear) +
+  labs(
+    title = "Nombre de faillites et taux de faillite par année",
+    x = "Année"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+```
+
+# Enregistrement des données
+
+```{r}
+saveRDS(df_logit, file = "data/df_logit.rds")
+```

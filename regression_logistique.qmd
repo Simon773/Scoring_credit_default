@@ -1,0 +1,59 @@
+---
+title: "Régression logistique"
+format: html
+editor: visual
+---
+
+# Import des données et libraries
+
+```{r}
+library(tidyverse)
+```
+
+```{r}
+data <- readRDS("data/df_logit.rds")
+data %>% select(default2, WCTA, RETA, EBTA, TLTA, SLTA) %>% summary()
+```
+
+# Altman's ratio
+
+```{r}
+data_altman <- data  %>%
+  mutate(across(c(WCTA, RETA, EBTA, TLTA, SLTA),
+                ~ replace(., is.infinite(.), NA)))
+data_altman <- data_altman %>% drop_na(WCTA, RETA, EBTA, TLTA, SLTA)
+data_altman %>% select(default2, WCTA, RETA, EBTA, TLTA, SLTA) %>% summary()
+```
+
+Revoir le traitement des variables manquantes
+
+```{r}
+altman_model <- glm(default2 ~ WCTA + RETA + EBTA + TLTA + SLTA, family="binomial", data = data_altman)
+summary(altman_model)
+```
+
+Je n'ai pas géré les différences de classes (peu de défaut 1)
+
+# Zmijewski (1984) ratios 
+
+(NI/TA, TL/TA, CA/CL)
+
+```{r}
+data_zmijewski <- data %>% select(ni,at, lt, lct, act, default2, TLTA)
+data_zmijewski$NITA <- data_zmijewski$ni / data_zmijewski$at
+data_zmijewski$CACL <- data_zmijewski$act / data_zmijewski$lct
+data_zmijewski <- data_zmijewski %>% 
+  mutate(across(c(NITA, CACL, TLTA),
+                ~ replace(., is.infinite(.), NA)))
+data_zmijewski <- data_zmijewski %>% drop_na(NITA, CACL, TLTA)
+data_zmijewski %>% select(default2, NITA, CACL, TLTA) %>% summary()
+```
+
+```{r}
+zmijewski_model <- glm(default2 ~ NITA + TLTA + CACL, family="binomial", data = data_zmijewski)
+summary(zmijewski_model)
+```
+
+Ajouter des variables en fonction de la littérature (voir Shumway)
+
+# ROC Curve
