@@ -10,6 +10,7 @@ Objectives for Wednesday 26th, 8h am (n'est-ce pas Simon ?):
   * Industry/sector (Campbell)
 * choix de l'horizon
 * quels modèles ? Régression logistique, XGBoost ?
+* méthodes d'oversampling ?
 * théorie modèle de survie : pourquoi, comment, quelles variables
 * assessment of the models: ROC Curve? ROC Curve vs accuracy? Moodys?
   * Attention dans les CV au time split (dans le test on doit avoir que le futur)
