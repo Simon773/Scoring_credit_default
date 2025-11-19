@@ -12,7 +12,7 @@ Objectives for Wednesday 26th, 8h am (n'est-ce pas Simon ?):
 * quels modèles ? Régression logistique, XGBoost ?
 * méthodes d'oversampling ?
 * théorie modèle de survie : pourquoi, comment, quelles variables $\rightarrow$ Nathan
-* assessment of the models: ROC Curve? ROC Curve vs accuracy? Moodys?
+* assessment of the models: ROC Curve? ROC Curve vs accuracy? Moodys? $\rightarrow$ Maëlys (finir Moodys) et Simon (dvp metrics pour année)
   * Attention dans les CV au time split (dans le test on doit avoir que le futur)
   * Attention au seuil auquel on regarde les metrics
 * diapo $\rightarrow$ Loan et Nathan
