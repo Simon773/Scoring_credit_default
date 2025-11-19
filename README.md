@@ -19,5 +19,5 @@ Objectives for Wednesday 26th, 8h am (n'est-ce pas Simon ?):
  * Analyse des NA en fonction des années $\rightarrow$ prendre les années plus récentes
 
 Objectives for December: 
-* fine-tuning of the model $rightarrow$ Simon
+* fine-tuning of the model $\rightarrow$ Simon
 * modèle de survie
