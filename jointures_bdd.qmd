@@ -1,0 +1,272 @@
+---
+title: "draft2_project_scoring"
+format: html
+---
+
+Première liaison des BDD
+
+```{r, message=FALSE, warning=FALSE}
+rm(list=ls())
+setwd("~/Maëlys One drive/TSE/M2/Scoring/Project")
+
+library(tidyverse)
+library(lubridate)
+library(readxl)
+```
+
+# Import des BDD compustat et company
+
+1 ligne par entreprise et par année => avoir les altman ratio
+```{r}
+compustat_all <- readRDS("compustat_all.rds") #mettre light pour juste les tests
+```
+
+```{r}
+compustat_variables <-readRDS("compustat_funda_variables.rds")
+```
+
+```{r}
+compustat_all %>%
+  select(gvkey, fyear, conm, at, wcap, re, ebit, lt, sale) %>%
+  summary()
+```
+
+Créer les ratios
+```{r}
+# mutate(WCTA = wcap / at,
+# RETA = re / at,
+# EBTA = ebit / at,
+# TLTA = lt / at, # as a proxy for ME/TL
+# SLTA = sale / at)
+```
+
+```{r}
+compustat_all_modif <- compustat_all %>%
+  select(gvkey, fyear, conm, at, wcap, re, ebit, lt, sale, lct, act) %>%
+  mutate( wcap2 = act - lct) %>%
+  mutate(WCTA = wcap / at,
+         WCTA2 = wcap2 / at, 
+         RETA = re / at,
+         EBTA = ebit / at,
+         TLTA = lt / at, # as a proxy for ME/TL
+         SLTA = sale / at)
+```
+
+si pas working capital, prendre diff entre current asset et current liabilities 
+
+current asset = act
+current liabilities = lct
+
+```{r}
+compustat_all_modif %>% summary()
+```
+
+
+1 ligne par entreprise, récupérer les colonnes dlrsn, dldte (date de deletion et raison)
+```{r}
+company_all <- readRDS("company_all.rds")
+```
+
+```{r}
+company_all_modif <- company_all %>% 
+  select(c("gvkey","conm", "conml", "dldte", "dlrsn", "sic")) %>%
+  mutate(default = ifelse(!is.na(dldte) & dlrsn %in% c("02", "03"), 1, 0)) %>%
+  mutate(sic = as.integer(sic)) %>%
+  mutate(industry = case_when(
+      sic >= 1 & sic <= 999   ~ "Agriculture",
+      sic >= 1000 & sic <= 1499 ~ "Mining",
+      sic >= 1500 & sic <= 1799 ~ "Construction",
+      sic >= 2000 & sic <= 3999 ~ "Manufacturing",
+      sic >= 4000 & sic <= 4899 ~ "Transportation",
+      sic >= 4900 & sic <= 4999 ~ "Utilities",
+      sic >= 5000 & sic <= 5199 ~ "Wholesale",
+      sic >= 5200 & sic <= 5999 ~ "Retail",
+      sic >= 6000 & sic <= 6799 ~ "Finance",
+      sic >= 7000 & sic <= 8999 ~ "Services",
+      sic >= 9000 & sic <= 9999 ~ "Public",
+      TRUE ~ "Missing"
+    ))
+```
+
+
+Pour crsp, utiliser https://www.tidy-finance.org/r/wrds-crsp-and-compustat.html pour passer de daily en montly 
+
+# Join compustat et company 
+
+```{r}
+join_cc <- compustat_all_modif %>% left_join(company_all_modif, by=c("gvkey", "conm"))
+```
+
+```{r}
+nrow(compustat_all)
+nrow(join_cc)
+```
+
+# Lopucky 
+
+```{r, message = FALSE, warning=FALSE}
+LoPucki <- read_excel("LoPucki.xlsx")
+```
+
+```{r}
+LoPucki %>% select(GvkeyBefore, )
+```
+
+```{r}
+LoPucki_clean<-LoPucki%>%
+  select(NameCorp,Chapter,GvkeyBefore,DateFiled)%>%
+  filter(Chapter %in% c('7', '11')) %>%
+  group_by(GvkeyBefore) %>%
+  summarize(DateFiled = min(DateFiled),
+            NameCorp = NameCorp[which.min(DateFiled)],
+            Chapter = Chapter[which.min(DateFiled)]) %>%
+  mutate(DateFiled = lubridate::as_date(DateFiled)) %>%
+  ungroup()
+```
+
+```{r}
+join_ccl <- join_cc %>%
+  left_join(LoPucki_clean, by=c("gvkey"="GvkeyBefore"))
+```
+
+```{r}
+join_ccl <- join_ccl %>%
+  mutate(default2 = ifelse(default == 1 | (!is.na(Chapter) & as.integer(substr(as.character(DateFiled), 1, 4)) == fyear), 1, 0))
+```
+
+```{r}
+join_ccl %>%
+  filter(default==1) %>%
+  count()
+```
+```{r}
+join_ccl %>%
+  filter(default2==1) %>%
+  count()
+```
+```{r}
+join_ccl%>%
+  filter(default != default2) %>%
+  select(gvkey, conm, fyear, DateFiled, default, default2)
+```
+Prendre default2
+
+# Visualisation par industry 
+
+```{r}
+
+
+# Calcul des deux indicateurs par industry
+data_plot <- join_ccl %>%
+  group_by(industry) %>%
+  summarise(
+    nb_default = n_distinct(gvkey[default2 == 1]),  # nb d'entreprises ayant fait défaut
+    nb_firms = n_distinct(gvkey)  
+  ) %>%
+  tidyr::pivot_longer(cols = c(nb_default, nb_firms),
+                      names_to = "type",
+                      values_to = "nombre")
+
+# Graphique comparatif
+ggplot(data_plot, aes(x = industry, y = nombre, fill = type)) +
+  geom_col(position = "dodge") +
+  labs(
+    title = "Nombre de défauts et d'entreprises par industrie",
+    x = "Industrie",
+    y = "Nombre",
+    fill = "Type"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+```
+
+
+
+```{r}
+data_pct <- join_ccl %>%
+  group_by(industry) %>%
+  summarise(
+    nb_default = n_distinct(gvkey[default2 == 1]),  # nb d'entreprises ayant fait défaut
+    nb_firms = n_distinct(gvkey)                   # nb total d'entreprises uniques
+  ) %>%
+  mutate(pct_default = 100 * (nb_default / nb_firms))
+
+# Graphique
+ggplot(data_pct, aes(x = industry,, y = pct_default)) +
+  geom_col(fill = "tomato") +
+  geom_text(aes(label = sprintf("%.1f%%", pct_default)),
+            vjust = -0.3, size = 3) +
+  labs(
+    title = "Pourcentage de défauts par industrie",
+    x = "Industrie",
+    y = "Taux de défaut (%)"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+# industries à enlever 
+
+```{r}
+rem_ind <- c("agriculture, finance, mining, public")
+```
+
+
+# Rajouter Moody's (attention join + compliqué) 
+En fait les données sont pas sur le drive
+
+```{r}
+dat_default_moodys_annual <- readRDS("dat_default_moodys_annual.rds")
+```
+
+```{r}
+
+trim_pattern <- ",|\\.|INC|LLC|CORPORATION|CORP|COMPANY|\\*| "
+dat_default_moodys_annual <- dat_default_moodys_annual %>%
+  mutate(
+    compact_conm = stringr::str_to_upper(company_name),
+    compact_conm = stringr::str_trim(gsub(trim_pattern, "", compact_conm)),
+    is_moodys = 1, 
+    fyear = year(default_date),
+    )%>%
+  distinct()
+```
+
+
+```{r}
+join_ccl <- join_ccl %>%
+  mutate(compact_conm = stringr::str_trim(gsub(trim_pattern, "", conm)))
+```
+
+```{r}
+join_cclm <- join_ccl %>%
+  left_join(dat_default_moodys_annual, by = c("compact_conm", "fyear"))
+```
+regarder le nombre d'entreprises que ça rajoute
+
+si l'entreprise est dedans (moodys) elle a default (date accessible dans date_default)
+
+```{r}
+join_cclm = join_cclm %>%
+  mutate(default3 = ifelse(default2 == 1 | (is_moodys==1) & (year(default_date) == fyear), 1, 0))
+```
+
+```{r}
+join_cclm %>% filter(default3 == 1) %>% 
+  filter(!is.na(default_date)) %>%
+  select("gvkey", "conm", "fyear", "default_date", "default_type", "default2", "default3")
+```
+
+```{r}
+join_cclm %>% filter(default2==1) %>%
+  count()
+```
+
+```{r}
+join_cclm %>% filter(default3==1) %>%
+  count()
+```
+
+
