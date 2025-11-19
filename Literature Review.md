@@ -216,3 +216,43 @@ Once bias is removed using the hazard model, only EBIT/TA and ME/TL is significa
 Market-based variables are powerful predictors: low market size → higher risk, poor past returns → higher risk, high volatility → higher risk
 Combining market variables + two accounting ratios (NI/TA and TL/TA) is the most accurate model
 
+## Moodys, 2000
+Il faut séparer entreprises privées et publiques => modèle fait pour les privées. Pour les publiques le + famous c'est Merton 
+Son modèle (RiskCalc) marche aussi pour des entreprises non financières 
+
+Besoin de 10 financial ratios / indicators computed from 17 basic financial inputs 
+Assets/CPI
+Inventories / COGS
+Liabilities / Assets
+Net Income Growth =>  (current Net Income/ Assets)-(prior Net Income/Assets)
+Net Income / Assets
+Quick Ratio =>  (Current Assets - Inventory)/Current Liabilities
+Retained Earnings / Assets
+Sales Growth =>  (current Sales/prior Sales)-1
+Cash / Assets
+Debt Service Coverage Ratio =>  EBIT/interest
+
+### A quel horizon regarder le défaut ? 
+"The real problem with the 1-year rate is that very few loans go bad within 12 months of origination, and of those that do, fraud is often a factor, in which case a model based on financials wouldn't work well anyway"
+
+Pas 1 an, Moodys fait 1 et 5, donc nous peut être regarder 3 et 5 ans. 
+
+### Quelle métrique utiliser ? 
+Il utilise CAP (Cumulative accuracy profile). C'est mieux qu'une ROC curve dans le cas où il y a peu de défauts, ce qui est notre cas. 
+
+La CAP représente, après avoir classé les emprunteurs du plus risqué au moins risqué (score prédit du plus haut au plus petit), le pourcentage cumulatif de défauts capturés en fonction du pourcentage cumulatif d’emprunteurs examinés (si on a pris les x premiers % d'entreprises rangées, quel % de défauts on a prédit).
+
+Exemple de code pour tracer ça
+df <- df %>%
+  arrange(desc(score)) %>%   # score = prob de défaut
+  mutate(
+    cum_borrowers = row_number() / n(),
+    cum_defaults  = cumsum(default) / sum(default)
+  )
+
+ggplot(df, aes(x = cum_borrowers, y = cum_defaults)) +
+  geom_line(size = 1) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed") +  # modèle aléatoire
+  labs(title = "CAP Curve",
+       x = "Cumulative Borrowers",
+       y = "Cumulative Defaults Captured")
