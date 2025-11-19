@@ -17,6 +17,7 @@ Objectives for Wednesday 26th, 8h am (n'est-ce pas Simon ?):
   * Attention au seuil auquel on regarde les metrics
 * diapo $\rightarrow$ Loan et Nathan
  * Analyse des NA en fonction des années $\rightarrow$ prendre les années plus récentes
+* Ajout du mois ? 
 
 Objectives for December: 
 * fine-tuning of the model $\rightarrow$ Simon
