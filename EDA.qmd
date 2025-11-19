@@ -1,0 +1,28 @@
+---
+title: "EDA"
+format: html
+editor: visual
+---
+
+# Import of the libraries and data
+
+```{r}
+library(ggplot2)
+library(tidyverse)
+```
+
+```{r}
+data <- readRDS("data/df_logit.rds")
+```
+
+# Default
+
+```{r}
+counts <- table(data$default)
+barplot(counts,
+        main = "Distribution de la variable default",
+        xlab = "Default (0 = non, 1 = oui)",
+        ylab = "Nombre d'observations",
+        col = c("skyblue", "tomato"),
+        border = "white")
+```

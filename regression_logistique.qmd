@@ -34,12 +34,43 @@ summary(altman_model)
 
 Je n'ai pas géré les différences de classes (peu de défaut 1)
 
-# Zmijewski (1984) ratios 
+Modèle qui ajoute des poids (inverse de la fréquence):
+
+```{r}
+#Creation of the weights
+freq <- table(data_altman$default2)
+data_altman$weights <- 1 / freq[match(data_altman$default2, names(freq))]
+
+#Model
+altman_model_weights <- glm(default2 ~ WCTA + RETA + EBTA + TLTA + SLTA, family="binomial", weights = weights, data = data_altman)
+summary(altman_model_weights)
+```
+
+Les résultats sont très mauvais (cf proba dans le summary). On fait donc des poids pondérés.
+
+```{r}
+# Calculer proportion
+prop <- prop.table(table(data_altman$default2))
+data_altman <- data_altman %>%
+  mutate(weights_2 = 1 / prop[match(default2, names(prop))])
+
+# Normaliser pour que la moyenne des poids = 1
+data_altman$weights_prop <- data_altman$weights_2 / mean(data_altman$weights_2)
+```
+
+```{r}
+altman_model_weights_prop <- glm(default2 ~ WCTA + RETA + EBTA + TLTA + SLTA, family="binomial", weights = weights_prop, data = data_altman)
+summary(altman_model_weights_prop)
+```
+
+Les résultats sont meilleurs : EBTA, SLTA, RETA significatif à 5%.
+
+# Zmijewski (1984) ratios
 
 (NI/TA, TL/TA, CA/CL)
 
 ```{r}
-data_zmijewski <- data %>% select(ni,at, lt, lct, act, default2, TLTA)
+data_zmijewski <- data %>% select(ni,at, lt, lct, act, default2, TLTA, industry)
 data_zmijewski$NITA <- data_zmijewski$ni / data_zmijewski$at
 data_zmijewski$CACL <- data_zmijewski$act / data_zmijewski$lct
 data_zmijewski <- data_zmijewski %>% 
@@ -54,6 +85,50 @@ zmijewski_model <- glm(default2 ~ NITA + TLTA + CACL, family="binomial", data = 
 summary(zmijewski_model)
 ```
 
-Ajouter des variables en fonction de la littérature (voir Shumway)
+Aucune variable significative à 1%
+
+Ajout des poids (directement la deuxième méthode d'Altman
+
+```{r}
+prop <- prop.table(table(data_zmijewski$default2))
+data_zmijewski <- data_zmijewski %>%
+  mutate(weights_2 = 1 / prop[match(default2, names(prop))])
+
+# Normaliser pour que la moyenne des poids = 1
+data_zmijewski$weights_prop <- data_zmijewski$weights_2 / mean(data_zmijewski$weights_2)
+```
+
+```{r}
+zmijewski_model <- glm(default2 ~ NITA + TLTA + CACL, family="binomial", data = data_zmijewski, weights = weights_2)
+summary(zmijewski_model)
+```
+
+Toutes les variables sont significatives à 5%.
+
+# Test avec tous les ratios
+
+# Others variables
+
+## Industries
+
+### Altman's ratio
+
+```{r}
+altman_model_industry <- glm(default2 ~ WCTA + RETA + EBTA + TLTA + SLTA + industry, family="binomial", weights = weights_prop, data = data_altman)
+summary(altman_model_industry)
+```
+
+Industrie très significatif
+
+### Zmijewski's ratio
+
+```{r}
+zmijewski_model <- glm(default2 ~ NITA + TLTA + CACL + industry, family="binomial", data = data_zmijewski, weights = weights_2)
+summary(zmijewski_model)
+```
+
+Toutes les variables sont signicatives.
+
+## Autre variable à ajouter ? 
 
 # ROC Curve
