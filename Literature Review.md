@@ -5,12 +5,12 @@
 - Altman, 1974
 - Ayash et al., 2023 (sur le drive: articulate, 2016)
 - Shumway, 2001
+- Moodys, 2000 $\rightarrow$ Maëlys
 
 ### En cours de lecture
 - Campbell, 2008 $\rightarrow$ Loan
 - Chava, 2004 $\rightarrow$ Nathan
 - Bardos, 2007 $\rightarrow$ Simon
-- Moodys, 2000 $\rightarrow$ Maëlys
 
 ### Reste à lire
 - Bondscore, 2004
