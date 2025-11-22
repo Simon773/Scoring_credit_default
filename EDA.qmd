@@ -9,20 +9,251 @@ editor: visual
 ```{r}
 library(ggplot2)
 library(tidyverse)
+library(reshape2)
 ```
 
 ```{r}
-data <- readRDS("data/df_logit.rds")
+data <- readRDS("data/df_joined.rds")
 ```
 
 # Default
 
 ```{r}
-counts <- table(data$default)
-barplot(counts,
-        main = "Distribution de la variable default",
-        xlab = "Default (0 = non, 1 = oui)",
-        ylab = "Nombre d'observations",
-        col = c("skyblue", "tomato"),
-        border = "white")
+# Comptes pour chaque variable
+default  <- table(data$default)[2]
+default2 <- table(data$default2)[2]
+default3 <- table(data$default3)
+
+df_counts <- data.frame(
+  variable = c("default", "default2", "default3"),
+  count = c(default, default2, default3)
+)
+```
+
+```{r}
+ggplot(df_counts, aes(x = variable, y = count, fill = variable)) +
+  geom_bar(stat = "identity") +  # utiliser les valeurs fournies
+  geom_text(aes(label = count), vjust = -0.5) +  # labels au-dessus
+  scale_fill_manual(values = c("skyblue", "tomato", "lightgreen")) +
+  labs(x = "Variables",
+       y = "Number of defaults") +
+  theme_minimal()
+```
+
+```{r}
+data$default3[is.na(data$default3)] <- 0
+```
+
+# Explanatory ratios
+
+Liste des ratios : WCTA = wcap / at, WCTA2 = wcap2 / at, RETA = re / at, EBTA = ebit / at, TLTA = lt / at, \# as a proxy for ME/TL SLTA = sale / at, NITA = ni / at, CACL = act / lct
+
+```{r}
+data_ratio <- data %>% select(WCTA, WCTA2, RETA, EBTA, TLTA, SLTA, NITA, CACL)
+```
+
+```{r}
+#Pourcentage de NA par colonnes d'intérêt
+round(colMeans(is.na(data_ratio)) * 100, 3)
+```
+
+```{r}
+# Pourcentage de NA pour default = 0
+na_pct_default0 <- sapply(data_ratio[data$default == 0, ], function(x) round(sum(is.na(x)) / length(x) * 100, 2))
+na_pct_default0
+
+# Pourcentage de NA pour default = 1
+na_pct_default1 <- sapply(data_ratio[data$default == 1, ], function(x) round(sum(is.na(x)) / length(x) * 100, 2))
+na_pct_default1
+```
+
+Pourcentage de valeurs manquantes plus important pour default = 1 $\rightarrow$ voir si on regarde plus en détail pour compléter ou pas, pour le moment, imputation par la moyenne
+
+```{r}
+data_ratio[sapply(data_ratio, is.numeric)] <- lapply(
+  data_ratio[sapply(data_ratio, is.numeric)],
+  function(x) { x[is.infinite(x)] <- NA; x }
+)
+
+for (var in names(data_ratio)) {
+  mean_val <- mean(data_ratio[[var]], na.rm = TRUE) 
+  data_ratio[[var]][is.na(data_ratio[[var]])] <- mean_val 
+}
+```
+
+```{r}
+colSums(is.na(data_ratio)) #Vérification  
+```
+
+```{r}
+data_ratio %>% summary()
+```
+
+### Imputation data
+
+```{r}
+data[sapply(data, is.numeric)] <- lapply(
+  data[sapply(data, is.numeric)],
+  function(x) { x[is.infinite(x)] <- NA; x }
+)
+
+for (var in names(data_ratio)) {
+  mean_val <- mean(data[[var]], na.rm = TRUE) 
+  data[[var]][is.na(data[[var]])] <- mean_val 
+}
+```
+
+## WCTA
+
+```{r}
+data_wcta <- data[data$WCTA > -2,]
+data_wcta <- data_wcta[data_wcta$WCTA < 2,] 
+```
+
+```{r}
+ggplot(data_wcta, aes(x = factor(default3), y = WCTA, fill = factor(default3))) +
+  geom_violin(alpha = 0.5) +
+  labs(x = "Default", y = "Ratio", fill = "Default") +
+  theme_minimal()
+```
+
+```{r}
+ggplot(data_wcta, aes(x = WCTA, color = factor(default3), fill = factor(default3))) +
+  geom_density(alpha = 0.4) +
+  labs(title = "Densité des valeurs selon defaults",
+       x = "Valeurs",
+       y = "Densité",
+       color = "Defaults",
+       fill = "Defaults") +
+  theme_minimal()
+```
+
+## RETA
+
+```{r}
+data_reta <- data[data$RETA > -3,]
+data_reta <- data_reta[data_reta$RETA < 2,] 
+```
+
+```{r}
+ggplot(data_reta, aes(x = RETA, color = factor(default3), fill = factor(default3))) +
+  geom_density(alpha = 0.4) +
+  labs(title = "Densité des valeurs selon defaults",
+       x = "Valeurs",
+       y = "Densité",
+       color = "Defaults",
+       fill = "Defaults") +
+  theme_minimal()
+```
+
+## EBTA
+
+```{r}
+data_ebta <- data[data$EBTA > -2,]
+data_ebta <- data_ebta[data_ebta$EBTA < 1,] 
+```
+
+```{r}
+ggplot(data_ebta, aes(x = EBTA, color = factor(default3), fill = factor(default3))) +
+  geom_density(alpha = 0.4) +
+  labs(title = "Densité des valeurs selon defaults",
+       x = "Valeurs",
+       y = "Densité",
+       color = "Defaults",
+       fill = "Defaults") +
+  theme_minimal()
+```
+
+## TLTA
+
+```{r}
+data_tlta <- data[data$TLTA > -2,]
+data_tlta <- data_tlta[data_tlta$TLTA < 2,] 
+```
+
+```{r}
+ggplot(data_tlta, aes(x = TLTA, color = factor(default3), fill = factor(default3))) +
+  geom_density(alpha = 0.4) +
+  labs(title = "Densité des valeurs selon defaults",
+       x = "Valeurs",
+       y = "Densité",
+       color = "Defaults",
+       fill = "Defaults") +
+  theme_minimal()
+```
+
+## SLTA
+
+```{r}
+data_slta <- data[data$SLTA > -1,]
+data_slta <- data_slta[data_slta$SLTA < 5,] 
+```
+
+```{r}
+ggplot(data_slta, aes(x = SLTA, color = factor(default3), fill = factor(default3))) +
+  geom_density(alpha = 0.4) +
+  labs(title = "Densité des valeurs selon defaults",
+       x = "Valeurs",
+       y = "Densité",
+       color = "Defaults",
+       fill = "Defaults") +
+  theme_minimal()
+```
+
+## NITA
+
+```{r}
+data_nita <- data[data$NITA > -1,]
+data_nita <- data_nita[data_nita$NITA < 1,] 
+```
+
+```{r}
+ggplot(data_nita, aes(x = NITA, color = factor(default3), fill = factor(default3))) +
+  geom_density(alpha = 0.4) +
+  labs(title = "Densité des valeurs selon defaults",
+       x = "Valeurs",
+       y = "Densité",
+       color = "Defaults",
+       fill = "Defaults") +
+  theme_minimal()
+```
+
+## CACL
+
+```{r}
+data_cacl <- data[data$CACL > -1,]
+data_cacl <- data_cacl[data_cacl$CACL < 5,]
+```
+
+```{r}
+ggplot(data_cacl, aes(x = CACL, color = factor(default3), fill = factor(default3))) +
+  geom_density(alpha = 0.4) +
+  labs(title = "Densité des valeurs selon defaults",
+       x = "Valeurs",
+       y = "Densité",
+       color = "Defaults",
+       fill = "Defaults") +
+  theme_minimal()
+```
+
+## Altman's ratio
+
+```{r}
+data$z <- 0.012 * data$WCTA + 0.014 * data$RETA + 0.033 * data$EBTA + 0.006 * data$TLTA + 0.999 * data$SLTA
+```
+
+```{r}
+data_z <- data[data$z > -1,]
+data_z <- data_z[data_z$z < 5,]
+```
+
+```{r}
+ggplot(data_z, aes(x = z, color = factor(default3), fill = factor(default3))) +
+  geom_density(alpha = 0.4) +
+  labs(title = "Densité des valeurs selon defaults",
+       x = "Valeurs",
+       y = "Densité",
+       color = "Defaults",
+       fill = "Defaults") +
+  theme_minimal()
 ```
