@@ -65,7 +65,7 @@ summary(altman_model_weights_prop)
 
 Les résultats sont meilleurs : EBTA, SLTA, RETA significatif à 5%.
 
-# Zmijewski (1984) ratios
+# Zmijewski's ratios (1984)
 
 (NI/TA, TL/TA, CA/CL)
 
@@ -129,6 +129,6 @@ summary(zmijewski_model)
 
 Toutes les variables sont signicatives.
 
-## Autre variable à ajouter ? 
+## Autre variable à ajouter ?
 
 # ROC Curve

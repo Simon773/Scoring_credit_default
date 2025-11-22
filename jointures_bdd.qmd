@@ -7,7 +7,7 @@ Première liaison des BDD
 
 ```{r, message=FALSE, warning=FALSE}
 rm(list=ls())
-setwd("~/Maëlys One drive/TSE/M2/Scoring/Project")
+setwd("~/M2/Scoring/Projet/Scoring_credit_default")
 
 library(tidyverse)
 library(lubridate)
@@ -16,13 +16,14 @@ library(readxl)
 
 # Import des BDD compustat et company
 
-1 ligne par entreprise et par année => avoir les altman ratio
+1 ligne par entreprise et par année =\> avoir les altman ratio
+
 ```{r}
-compustat_all <- readRDS("compustat_all.rds") #mettre light pour juste les tests
+compustat_all <- readRDS("data/compustat_all.rds") #mettre light pour juste les tests
 ```
 
 ```{r}
-compustat_variables <-readRDS("compustat_funda_variables.rds")
+compustat_variables <-readRDS("data/compustat_funda_variables.rds")
 ```
 
 ```{r}
@@ -32,6 +33,7 @@ compustat_all %>%
 ```
 
 Créer les ratios
+
 ```{r}
 # mutate(WCTA = wcap / at,
 # RETA = re / at,
@@ -42,29 +44,30 @@ Créer les ratios
 
 ```{r}
 compustat_all_modif <- compustat_all %>%
-  select(gvkey, fyear, conm, at, wcap, re, ebit, lt, sale, lct, act) %>%
+  select(gvkey, fyear, conm, at, wcap, re, ebit, lt, sale, lct, act, ni) %>%
   mutate( wcap2 = act - lct) %>%
   mutate(WCTA = wcap / at,
          WCTA2 = wcap2 / at, 
          RETA = re / at,
          EBTA = ebit / at,
          TLTA = lt / at, # as a proxy for ME/TL
-         SLTA = sale / at)
+         SLTA = sale / at, 
+         NITA = ni / at, 
+         CACL = act / lct)
 ```
 
-si pas working capital, prendre diff entre current asset et current liabilities 
+si pas working capital, prendre diff entre current asset et current liabilities
 
-current asset = act
-current liabilities = lct
+current asset = act current liabilities = lct
 
 ```{r}
 compustat_all_modif %>% summary()
 ```
 
-
 1 ligne par entreprise, récupérer les colonnes dlrsn, dldte (date de deletion et raison)
+
 ```{r}
-company_all <- readRDS("company_all.rds")
+company_all <- readRDS("data/company_all.rds")
 ```
 
 ```{r}
@@ -88,10 +91,9 @@ company_all_modif <- company_all %>%
     ))
 ```
 
+Pour crsp, utiliser https://www.tidy-finance.org/r/wrds-crsp-and-compustat.html pour passer de daily en montly
 
-Pour crsp, utiliser https://www.tidy-finance.org/r/wrds-crsp-and-compustat.html pour passer de daily en montly 
-
-# Join compustat et company 
+# Join compustat et company
 
 ```{r}
 join_cc <- compustat_all_modif %>% left_join(company_all_modif, by=c("gvkey", "conm"))
@@ -102,10 +104,10 @@ nrow(compustat_all)
 nrow(join_cc)
 ```
 
-# Lopucky 
+# Lopucky
 
 ```{r, message = FALSE, warning=FALSE}
-LoPucki <- read_excel("LoPucki.xlsx")
+LoPucki <- read_excel("data/Lopucki.xlsx")
 ```
 
 ```{r}
@@ -139,19 +141,22 @@ join_ccl %>%
   filter(default==1) %>%
   count()
 ```
+
 ```{r}
 join_ccl %>%
   filter(default2==1) %>%
   count()
 ```
+
 ```{r}
 join_ccl%>%
   filter(default != default2) %>%
   select(gvkey, conm, fyear, DateFiled, default, default2)
 ```
+
 Prendre default2
 
-# Visualisation par industry 
+# Visualisation par industry
 
 ```{r}
 
@@ -182,8 +187,6 @@ ggplot(data_plot, aes(x = industry, y = nombre, fill = type)) +
 
 ```
 
-
-
 ```{r}
 data_pct <- join_ccl %>%
   group_by(industry) %>%
@@ -207,18 +210,19 @@ ggplot(data_pct, aes(x = industry,, y = pct_default)) +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
 ```
-# industries à enlever 
+
+# industries à enlever
 
 ```{r}
 rem_ind <- c("agriculture, finance, mining, public")
 ```
 
+# Rajouter Moody's (attention join + compliqué)
 
-# Rajouter Moody's (attention join + compliqué) 
 En fait les données sont pas sur le drive
 
 ```{r}
-dat_default_moodys_annual <- readRDS("dat_default_moodys_annual.rds")
+dat_default_moodys_annual <- readRDS("data/dat_default_moodys_annual.rds")
 ```
 
 ```{r}
@@ -234,7 +238,6 @@ dat_default_moodys_annual <- dat_default_moodys_annual %>%
   distinct()
 ```
 
-
 ```{r}
 join_ccl <- join_ccl %>%
   mutate(compact_conm = stringr::str_trim(gsub(trim_pattern, "", conm)))
@@ -244,6 +247,7 @@ join_ccl <- join_ccl %>%
 join_cclm <- join_ccl %>%
   left_join(dat_default_moodys_annual, by = c("compact_conm", "fyear"))
 ```
+
 regarder le nombre d'entreprises que ça rajoute
 
 si l'entreprise est dedans (moodys) elle a default (date accessible dans date_default)
@@ -269,4 +273,16 @@ join_cclm %>% filter(default3==1) %>%
   count()
 ```
 
+# Export de la base de données
 
+On enlève les industries de rem_ind
+
+```{r}
+rem_ind <- c("Agriculture", "Finance", "Mining", "Public")
+df <- join_cclm %>% filter(! industry %in% rem_ind)
+nrow(df) != nrow(join_cclm) #doit être TRUE
+```
+
+```{r}
+saveRDS(df, "data/df_joined.rds")
+```
