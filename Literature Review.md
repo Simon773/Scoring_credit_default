@@ -216,6 +216,18 @@ Once bias is removed using the hazard model, only EBIT/TA and ME/TL is significa
 Market-based variables are powerful predictors: low market size → higher risk, poor past returns → higher risk, high volatility → higher risk
 Combining market variables + two accounting ratios (NI/TA and TL/TA) is the most accurate model
 
+## Chava, 2004
+
+Abstract: Using an expanded bankruptcy database they validate the forecasting performance of Shumway’s (2001) and they add industry effects in hazard rate estimation. 
+They also proved that bankruptcy prediction is improved using monthly observations rather than yearly data. 
+Finnaly, accounting variables add little predictive power when market variables are already included in the bankruptcy model.
+
+Data: Same as Shumway, they only consider the non-financial firms ; 
+
+Industry effect: four industry groupings: (i) finance, insurance and real estate, (ii) transportation, communications and utilities, (iii) manufacturing and mineral, and (iv) miscellaneous industries (the complement of (i)–(iii)).
+
+Industry groupings are shown to significantly affect both the intercept and slope coefficients in the forecasting equations.
+
 ## Moodys, 2000
 Il faut séparer entreprises privées et publiques => modèle fait pour les privées. Pour les publiques le + famous c'est Merton 
 Son modèle (RiskCalc) marche aussi pour des entreprises non financières 
