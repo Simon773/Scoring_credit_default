@@ -8,27 +8,31 @@ editor: visual
 
 ```{r}
 library(tidyverse)
+library(DescTools)
 ```
 
 ```{r}
-data <- readRDS("data/df_logit.rds")
-data %>% select(default2, WCTA, RETA, EBTA, TLTA, SLTA) %>% summary()
+data <- readRDS("data/df_winsorized.rds")
+data %>% select(default3, WCTA, RETA, EBTA, TLTA, SLTA) %>% summary()
+```
+
+```         
 ```
 
 # Altman's ratio
 
 ```{r}
-data_altman <- data  %>%
-  mutate(across(c(WCTA, RETA, EBTA, TLTA, SLTA),
-                ~ replace(., is.infinite(.), NA)))
-data_altman <- data_altman %>% drop_na(WCTA, RETA, EBTA, TLTA, SLTA)
-data_altman %>% select(default2, WCTA, RETA, EBTA, TLTA, SLTA) %>% summary()
+# data_altman <- data  %>%
+#   mutate(across(c(WCTA, RETA, EBTA, TLTA, SLTA),
+#                 ~ replace(., is.infinite(.), NA)))
+data_altman <- data %>% drop_na(WCTA, RETA, EBTA, TLTA, SLTA)
+data_altman %>% select(default3, WCTA, RETA, EBTA, TLTA, SLTA) %>% summary()
 ```
 
 Revoir le traitement des variables manquantes
 
 ```{r}
-altman_model <- glm(default2 ~ WCTA + RETA + EBTA + TLTA + SLTA, family="binomial", data = data_altman)
+altman_model <- glm(default3 ~ WCTA + RETA + EBTA + TLTA + SLTA, family="binomial", data = data_altman)
 summary(altman_model)
 ```
 
@@ -38,11 +42,11 @@ Modèle qui ajoute des poids (inverse de la fréquence):
 
 ```{r}
 #Creation of the weights
-freq <- table(data_altman$default2)
-data_altman$weights <- 1 / freq[match(data_altman$default2, names(freq))]
+freq <- table(data_altman$default3)
+data_altman$weights <- 1 / freq[match(data_altman$default3, names(freq))]
 
 #Model
-altman_model_weights <- glm(default2 ~ WCTA + RETA + EBTA + TLTA + SLTA, family="binomial", weights = weights, data = data_altman)
+altman_model_weights <- glm(default3 ~ WCTA + RETA + EBTA + TLTA + SLTA, family="binomial", weights = weights, data = data_altman)
 summary(altman_model_weights)
 ```
 
@@ -50,20 +54,42 @@ Les résultats sont très mauvais (cf proba dans le summary). On fait donc des p
 
 ```{r}
 # Calculer proportion
-prop <- prop.table(table(data_altman$default2))
+prop <- prop.table(table(data_altman$default3))
 data_altman <- data_altman %>%
-  mutate(weights_2 = 1 / prop[match(default2, names(prop))])
+  mutate(weights_2 = 1 / prop[match(default3, names(prop))])
 
 # Normaliser pour que la moyenne des poids = 1
 data_altman$weights_prop <- data_altman$weights_2 / mean(data_altman$weights_2)
 ```
 
 ```{r}
-altman_model_weights_prop <- glm(default2 ~ WCTA + RETA + EBTA + TLTA + SLTA, family="binomial", weights = weights_prop, data = data_altman)
+altman_model_weights_prop <- glm(default3 ~ WCTA + RETA + EBTA + TLTA + SLTA, family="binomial", weights = weights_prop, data = data_altman)
 summary(altman_model_weights_prop)
 ```
 
 Les résultats sont meilleurs : EBTA, SLTA, RETA significatif à 5%.
+
+## Winsorized variables
+
+```{r}
+data_altman_win <- data %>% drop_na(WCTA_win, RETA_win, EBTA_win, TLTA_win, SLTA_win)
+data_altman_win %>% select(default3, WCTA_win, RETA_win, EBTA_win, TLTA_win, SLTA_win) %>% summary()
+```
+
+```{r}
+# Calculer proportion
+prop <- prop.table(table(data_altman_win$default3))
+data_altman_win <- data_altman_win %>%
+  mutate(weights_2 = 1 / prop[match(default3, names(prop))])
+
+# Normaliser pour que la moyenne des poids = 1
+data_altman_win$weights_prop <- data_altman_win$weights_2 / mean(data_altman_win$weights_2)
+```
+
+```{r}
+altman_model_weights_prop <- glm(default3 ~ WCTA_win + RETA_win + EBTA_win + TLTA_win + SLTA_win, family="binomial", weights = weights_prop, data = data_altman_win)
+summary(altman_model_weights_prop)
+```
 
 # Zmijewski's ratios (1984)
 

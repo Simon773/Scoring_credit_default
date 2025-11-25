@@ -1,0 +1,145 @@
+---
+title: "Data cleaning"
+author: "Loan Rottier"
+date: "2025-11-24"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Import des données et libraries
+
+```{r}
+library(DescTools)
+library(ggplot2)
+```
+
+```{r}
+data <- readRDS("data/df_joined.rds") 
+```
+
+```{r}
+data_ratio <- data %>% select(WCTA, WCTA2, RETA, EBTA, TLTA, SLTA, NITA, CACL)
+```
+
+# Imputation
+
+Avec la moyenne
+
+```{r}
+data[sapply(data, is.numeric)] <- lapply(
+  data[sapply(data, is.numeric)],
+  function(x) { x[is.infinite(x)] <- NA; x }
+)
+
+for (var in names(data_ratio)) {
+  mean_val <- mean(data[[var]], na.rm = TRUE) 
+  data[[var]][is.na(data[[var]])] <- mean_val 
+}
+```
+
+# Winsorization
+
+```{r}
+data$WCTA_win <- Winsorize(data$WCTA, val= quantile(data$WCTA, probs = c(0.05, 0.95)))
+```
+
+```{r}
+ggplot(data, aes(x = WCTA_win, color = factor(default3), fill = factor(default3))) +
+  geom_density(alpha = 0.4) +
+  labs(title = "Densité des valeurs selon defaults",
+       x = "Valeurs",
+       y = "Densité",
+       color = "Defaults",
+       fill = "Defaults") +
+  theme_minimal()
+```
+
+```{r}
+data$EBTA_win <- Winsorize(data$EBTA, val= quantile(data$EBTA, probs = c(0.03, 0.95)))
+```
+
+```{r}
+ggplot(data, aes(x = EBTA_win, color = factor(default3), fill = factor(default3))) +
+  geom_density(alpha = 0.4) +
+  labs(title = "Densité des valeurs selon defaults",
+       x = "Valeurs",
+       y = "Densité",
+       color = "Defaults",
+       fill = "Defaults") +
+  theme_minimal()
+```
+
+```{r}
+data$RETA_win <- Winsorize(data$RETA, val= quantile(data$RETA, probs = c(0.1, 1)))
+```
+
+```{r}
+ggplot(data, aes(x = RETA_win, color = factor(default3), fill = factor(default3))) +
+  geom_density(alpha = 0.4) +
+  labs(title = "Densité des valeurs selon defaults",
+       x = "Valeurs",
+       y = "Densité",
+       color = "Defaults",
+       fill = "Defaults") +
+  theme_minimal()
+```
+
+```{r}
+data$TLTA_win <- Winsorize(data$TLTA, val= quantile(data$TLTA, probs = c(0, 0.95)))
+```
+
+```{r}
+ggplot(data, aes(x = TLTA_win, color = factor(default3), fill = factor(default3))) +
+  geom_density(alpha = 0.4) +
+  labs(title = "Densité des valeurs selon defaults",
+       x = "Valeurs",
+       y = "Densité",
+       color = "Defaults",
+       fill = "Defaults") +
+  theme_minimal()
+```
+
+```{r}
+data$SLTA_win <- Winsorize(data$SLTA, val= quantile(data$SLTA, probs = c(0.05, 0.95)))
+```
+
+```{r}
+ggplot(data, aes(x = SLTA_win, color = factor(default3), fill = factor(default3))) +
+  geom_density(alpha = 0.4) +
+  labs(title = "Densité des valeurs selon defaults",
+       x = "Valeurs",
+       y = "Densité",
+       color = "Defaults",
+       fill = "Defaults") +
+  theme_minimal()
+```
+
+```{r}
+data$NITA_win <- Winsorize(data$NITA, val= quantile(data$NITA, probs = c(0.05, 0.95)))
+```
+
+```{r}
+ggplot(data, aes(x = NITA_win, color = factor(default3), fill = factor(default3))) +
+  geom_density(alpha = 0.4) +
+  labs(title = "Densité des valeurs selon defaults",
+       x = "Valeurs",
+       y = "Densité",
+       color = "Defaults",
+       fill = "Defaults") +
+  theme_minimal()
+```
+
+# Replace NA dans default3
+
+```{r}
+data$default3[is.na(data$default3)] <- 0
+```
+
+# Export
+
+```{r}
+saveRDS(data, "data/df_winsorized.rds")
+```
