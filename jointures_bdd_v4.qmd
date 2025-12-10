@@ -1,0 +1,757 @@
+---
+title: "jointures_bdd_v4"
+format: html
+---
+
+```{r, message=FALSE, warning=FALSE}
+rm(list=ls())
+setwd("~/Maëlys One drive/TSE/M2/Scoring/Project")
+
+library(tidyverse)
+library(lubridate)
+library(readxl)
+```
+
+# Compustat
+
+Permet d'avoir les ratios d'Altman
+
+```{r}
+compustat_all <- readRDS("compustat_all.rds") #mettre light pour juste les tests
+```
+
+```{r}
+compustat_variables <-readRDS("compustat_funda_variables.rds")
+```
+
+```{r}
+compustat_all %>%
+  select(gvkey, fyear, conm, at, wcap, re, ebit, lt, sale) %>%
+  summary()
+```
+
+Building the ratios
+
+```{r}
+compustat_all_modif <- compustat_all %>%
+  select(gvkey, fyear,fyr, conm, at, wcap, re, ebit, lt, sale, lct, act) %>%
+  mutate( wcap2 = act - lct) %>%
+  mutate(WCTA = wcap / at,
+         WCTA2 = wcap2 / at, 
+         RETA = re / at,
+         EBTA = ebit / at,
+         TLTA = lt / at, # as a proxy for ME/TL
+         SLTA = sale / at)
+```
+
+# Defaults Company
+
+Permet d'avoir les défauts des entreprises, prendre les raisons 02 et 03, des entreprises non financières
+
+```{r}
+company_all <- readRDS("company_all.rds")
+```
+
+```{r}
+company_all_sel <- company_all %>% 
+  filter(dlrsn %in% c("02", "03")) %>%
+  select(c("gvkey","conm", "dldte", "dlrsn"))
+
+company_all_sic <- company_all %>% select(c("gvkey", "conm", "sic"))
+
+test_join_cc <- compustat_all_modif %>% left_join(company_all_sel, by=c("gvkey", "conm")) %>%
+  left_join(company_all_sic, by=c("gvkey", "conm")) %>%
+  mutate(sic = as.integer(sic)) %>%
+  mutate(industry = case_when(
+      sic >= 1 & sic <= 999   ~ "Agriculture",
+      sic >= 1000 & sic <= 1499 ~ "Mining",
+      sic >= 1500 & sic <= 1799 ~ "Construction",
+      sic >= 2000 & sic <= 3999 ~ "Manufacturing",
+      sic >= 4000 & sic <= 4899 ~ "Transportation",
+      sic >= 4900 & sic <= 4999 ~ "Utilities",
+      sic >= 5000 & sic <= 5199 ~ "Wholesale",
+      sic >= 5200 & sic <= 5999 ~ "Retail",
+      sic >= 6000 & sic <= 6799 ~ "Finance",
+      sic >= 7000 & sic <= 8999 ~ "Services",
+      sic >= 9000 & sic <= 9999 ~ "Public",
+      TRUE ~ "Missing"
+    ))
+```
+
+```{r}
+keep_indus <- c("Agricultre", "Mining","Construction", "Manufacturing", "Transportation", "Utilities","Wholesale", "Retail", "Services")
+```
+
+```{r}
+test_join_cc %>%
+  group_by(dlrsn) %>%
+  summarize(n_distinct(conm))
+```
+
+```{r}
+test_join_cc %>%
+  filter(industry %in% keep_indus) %>%
+  group_by(dlrsn) %>%
+  summarize(n_distinct(conm))
+```
+
+# LoPucki
+
+```{r, message = FALSE, warning=FALSE}
+LoPucki <- read_excel("LoPucki.xlsx")
+```
+
+```{r}
+LoPucki_clean<-LoPucki%>%
+  select(NameCorp,Chapter,GvkeyBefore,DateFiled, DateEmerging)%>%
+  filter(Chapter %in% c('7', '11')) %>%
+  group_by(GvkeyBefore) %>%
+  summarize(DateFiled = min(DateFiled),
+            NameCorp = NameCorp[which.min(DateFiled)],
+            Chapter = Chapter[which.min(DateFiled)]) %>%
+  mutate(DateFiled = lubridate::as_date(DateFiled)) %>%
+  ungroup()
+```
+
+```{r}
+test_join_ccl <- test_join_cc %>% left_join(LoPucki_clean, by=c("gvkey"="GvkeyBefore"))
+```
+
+# Ajout du défaut dans la base
+
+Je prend la première date entre LoPucki et compustat Je regarde si l'entreprise a fait défaut dans les 1, 3 et 5 ans suivant la fin de l'année fiscale On a une ligne par année fiscale dans compustat (altman ratios)
+
+```{r}
+# test_join_ccl_wd <- test_join_ccl %>%
+#   mutate(
+#     # Dates propres
+#     DateFiled = as.Date(DateFiled),
+#     dldte     = as.Date(dldte),
+# 
+#     # Choisir la plus ancienne des deux
+#     date_default = pmin(DateFiled, dldte, na.rm = TRUE),
+# 
+#     # Fin d’année fiscale → on garde le 30
+#     end_fy = make_date(fyear, fyr, 30),
+# 
+#     # Fenêtres COMPLÈTEMENT inclusives (important!)
+#     end_fy_1Y = (end_fy %m+% years(1)) + days(1),
+#     end_fy_3Y = (end_fy %m+% years(3)) + days(1),
+#     end_fy_5Y = (end_fy %m+% years(5)) + days(1),
+# 
+#     # Flags robustes
+#     default_1Y = ifelse(!is.na(date_default) &
+#                         date_default >= end_fy &
+#                         date_default <= end_fy_1Y,
+#                         1, 0),
+# 
+#     default_3Y = ifelse(!is.na(date_default) &
+#                         date_default >= end_fy &
+#                         date_default <= end_fy_3Y,
+#                         1, 0),
+# 
+#     default_5Y = ifelse(!is.na(date_default) &
+#                         date_default >= end_fy &
+#                         date_default <= end_fy_5Y,
+#                         1, 0)
+#   )
+```
+
+```{r}
+# test_join_ccl_wd <- test_join_ccl %>%
+#   # 1. Conversion et nettoyage des dates brutes
+#   mutate(
+#     DateFiled = as.Date(DateFiled),
+#     dldte     = as.Date(dldte),
+#     # On prend la date la plus ancienne disponible sur la ligne entre Lopucki et Compustat
+#     raw_default_date = pmin(DateFiled, dldte, na.rm = TRUE) 
+#   ) %>%
+# 
+#   # 2. GESTION DES DÉFAUTS MULTIPLES (Ce que tu voulais ajouter)
+#   # On groupe par entreprise (gvkey) pour trouver la TOUTE PREMIÈRE date de défaut
+#   group_by(gvkey) %>%
+#   mutate(
+#     # Si une entreprise a fait faillite en 2002 puis en 2008, on considère
+#     # que sa "mort" pour le modèle est en 2002.
+#     final_default_date = min(raw_default_date, na.rm = TRUE)
+#   ) %>%
+#   ungroup() %>%
+# 
+#   # 3. Calcul des dates clés pour le modèle (sans biais)
+#   mutate(
+#     # Fin d'année fiscale
+#     end_fy = make_date(fyear, fyr, 30),
+# 
+#     # DATE DE DÉBUT DE PRÉDICTION (Lag Shumway de 6 mois)
+#     # C'est la date où l'on se place pour faire le pari.
+#     prediction_start_date = end_fy %m+% months(6),
+# 
+#     # Fenêtres de prédiction (à partir de la date de prédiction)
+#     end_window_1Y = prediction_start_date %m+% years(1),
+#     end_window_3Y = prediction_start_date %m+% years(3),
+#     end_window_5Y = prediction_start_date %m+% years(5)
+#   ) %>%
+# 
+#   # 4. NETTOYAGE DES "ZOMBIES" (Données post-défaut)
+#   # On garde la ligne seulement si :
+#   # - L'entreprise n'a jamais fait défaut (is.na)
+#   # - OU BIEN la date où l'on fait la prédiction est AVANT le défaut
+#   filter(is.na(final_default_date) | prediction_start_date < final_default_date) %>%
+# 
+#   # 5. CRÉATION DES FLAGS (0 ou 1)
+#   # 5. CRÉATION DES FLAGS (Version explicite et sécurisée)
+#   mutate(
+#     default_1Y = ifelse(!is.na(final_default_date) & 
+#                         final_default_date > prediction_start_date & # Sécurité ajoutée
+#                         final_default_date <= end_window_1Y, 1, 0),
+# 
+#     default_3Y = ifelse(!is.na(final_default_date) & 
+#                         final_default_date > prediction_start_date & # Sécurité ajoutée
+#                         final_default_date <= end_window_3Y, 1, 0),
+# 
+#     default_5Y = ifelse(!is.na(final_default_date) & 
+#                         final_default_date > prediction_start_date & # Sécurité ajoutée
+#                         final_default_date <= end_window_5Y, 1, 0)
+#   )
+```
+
+```{r}
+test_join_ccl_wd <- test_join_ccl %>%
+  # 1. Conversion et nettoyage des dates brutes
+  mutate(
+    DateFiled = as.Date(DateFiled),
+    dldte     = as.Date(dldte),
+    raw_default_date = pmin(DateFiled, dldte, na.rm = TRUE) 
+  ) %>%
+
+  # 2. GESTION DES DÉFAUTS MULTIPLES (CORRIGÉ)
+  group_by(gvkey) %>%
+  mutate(
+    # CORRECTION ICI : On vérifie s'il y a au moins une date valide
+    final_default_date = if(all(is.na(raw_default_date))) {
+      as.Date(NA) 
+    } else {
+      min(raw_default_date, na.rm = TRUE)
+    }
+  ) %>%
+  ungroup() %>%
+
+  # 3. Calcul des dates clés pour le modèle
+  mutate(
+    # CORRECTION DATE : Utiliser 'day=30' plante pour Février. 
+    # Astuce : On prend le 1er du mois, on ajoute 1 mois, on retire 1 jour = Fin du mois exacte.
+    end_fy = make_date(fyear, fyr, 1) %m+% months(1) %m-% days(1),
+
+    # DATE DE DÉBUT DE PRÉDICTION (Lag Shumway de 6 mois)
+    prediction_start_date = end_fy %m+% months(6),
+
+    # Fenêtres de prédiction
+    end_window_1Y = prediction_start_date %m+% years(1),
+    end_window_3Y = prediction_start_date %m+% years(3),
+    end_window_5Y = prediction_start_date %m+% years(5)
+  ) %>%
+
+  # 4. NETTOYAGE DES "ZOMBIES"
+  filter(is.na(final_default_date) | prediction_start_date < final_default_date) %>%
+
+  # 5. CRÉATION DES FLAGS (Sécurisée)
+  mutate(
+    default_1Y = ifelse(!is.na(final_default_date) & 
+                        final_default_date > prediction_start_date & 
+                        final_default_date <= end_window_1Y, 1, 0),
+
+    default_3Y = ifelse(!is.na(final_default_date) & 
+                        final_default_date > prediction_start_date & 
+                        final_default_date <= end_window_3Y, 1, 0),
+
+    default_5Y = ifelse(!is.na(final_default_date) & 
+                        final_default_date > prediction_start_date & 
+                        final_default_date <= end_window_5Y, 1, 0)
+  )
+```
+
+```{r}
+test_join_ccl_wd %>%
+  filter(industry %in% keep_indus) %>%
+  summarise(
+    n_gvkey_1Y = n_distinct(gvkey[default_1Y == 1]),
+    n_gvkey_3Y = n_distinct(gvkey[default_3Y == 1]),
+    n_gvkey_5Y = n_distinct(gvkey[default_5Y == 1])
+  )
+```
+
+```{r}
+keep_indus_wpublic <- c(keep_indus, "Public")
+test_join_ccl_wd %>%
+  filter(industry %in% keep_indus_wpublic) %>%
+  summarise(
+    n_gvkey_1Y = n_distinct(gvkey[default_1Y == 1]),
+    n_gvkey_3Y = n_distinct(gvkey[default_3Y == 1]),
+    n_gvkey_5Y = n_distinct(gvkey[default_5Y == 1])
+  )
+```
+
+```{r}
+# test_plus_1_an <- test_join_ccl_wd %>%
+#   mutate(
+#     dldte     = as.Date(dldte),
+#     DateFiled = as.Date(DateFiled),
+#     date_default = pmin(dldte, DateFiled, na.rm = TRUE)
+#   )
+# 
+# result <- test_plus_1_an %>%
+#   group_by(gvkey) %>%
+#   mutate(
+#     max_fyear = max(fyear, na.rm = TRUE),
+#     # Mois de clôture (fyr) supposé constant pour un gvkey
+#     fyr_end = first(fyr),
+#     end_fy = make_date(max_fyear, fyr_end, 30),
+#     # Condition : plus d’un an entre date_default et fin du dernier FY
+#     more_than_1y = date_default > (end_fy %m+% years(1))
+#   ) %>%
+#   ungroup() %>%
+#   filter(more_than_1y == TRUE)
+
+```
+
+# CRSP
+
+Gemini me dit de ne pas prendre les données CRSP après les infos compustat (cas où j'ai pas mal d'écart entre dernière info compustat et date de défaut) parce que le modèle va utiliser à la fois les ratios et les données agrégées de CRSP Si on a pas l'info, on ne peut pas l'inventer ou compléter comme ça
+
+Donc on rajoute CRSP agrégé à la maille de la prediction date =\> 6 mois après la fin de l'année fiscale, car les entreprises mettent un peu de temps à publier Pourquoi ce décalage ? Les données comptables (dettes etc de compustat) les investisseurs ne les ont pas en tant réel, donc si la faillite est trop proche de la date de fin de l'année fiscale (\<4 mois) les investisseurs n'avaient certainement pas accès aux infos de la cloture comptable (tant de l'audit etc) On prend 6 mois pour être safe (Shumway)
+
+```{r}
+ccmxpf_linktable<-readRDS("ccmxpf_linktable.rds")
+```
+
+```{r}
+crsp_daily<-readRDS("crsp_daily.rds")
+```
+
+```{r}
+# 
+# # --- ÉTAPE A : Préparation de la table de liaison ---
+# # On nettoie la table pour gérer les dates de fin manquantes
+# link_table_clean <- ccmxpf_linktable %>%
+#   # On sélectionne vos colonnes (puisque vous m'avez dit avoir déjà "permno" et pas "lpermno")
+#   select(gvkey, permno, linkdt, linkenddt) %>%
+#   
+#   # Si linkenddt est NA (lien toujours actif), on remplace par la date d'aujourd'hui
+#   mutate(linkenddt = replace_na(linkenddt, today()))
+# 
+# 
+# # --- ÉTAPE B : Création du squelette avec PERMNO ---
+# skeleton_with_permno <- test_join_ccl_wd %>% 
+#   # On utilise inner_join avec join_by() pour gérer les dates DIRECTEMENT
+#   inner_join(link_table_clean, 
+#              join_by(gvkey, 
+#                      prediction_start_date >= linkdt, 
+#                      prediction_start_date <= linkenddt)) %>%
+#   
+#   # Sécurité : Si jamais une entreprise a deux liens actifs le même jour (rare mais possible)
+#   # On prend le lien "Principal" (souvent implicite) ou on dédoublonne
+#   distinct(gvkey, fyear, .keep_all = TRUE) %>%
+#   
+#   # Sélection des colonnes
+#   select(gvkey, fyear, prediction_start_date, permno)
+```
+
+```{r}
+# # 0. Nettoyage préventif
+# gc() 
+# 
+# # 1. On prépare CRSP en ne gardant QUE le strict nécessaire
+# # Cela libère énormément de RAM par rapport à garder tout le dataframe
+# crsp_light <- crsp_daily %>%
+#   select(permno, date, ret, prc, shrout)
+# 
+# # 2. On prépare le squelette avec les fenêtres temporelles
+# skeleton_optimized <- skeleton_with_permno %>%
+#   mutate(
+#     window_start = prediction_start_date %m-% years(1),
+#     window_end   = prediction_start_date
+#   ) %>%
+#   select(gvkey, fyear, permno, window_start, window_end)
+# 
+# # 3. La Jointure Optimisée (Non-Equi Join)
+# # R ne va charger en mémoire QUE les lignes qui correspondent aux dates
+# final_features_aggregated <- skeleton_optimized %>%
+#   # Jointure intelligente : Permno égal ET dates dans l'intervalle
+#   inner_join(crsp_light, join_by(permno, window_start < date, window_end >= date)) %>%
+#   
+#   # On agrège immédiatement pour réduire la taille
+#   group_by(gvkey, fyear, window_end) %>%
+#   summarise(
+#     sigma_E = sd(ret, na.rm = TRUE) * sqrt(252),
+#     past_ret = exp(sum(log(1 + ret), na.rm = TRUE)) - 1,
+#     
+#     # Pour Market Cap, on prend le dernier dispo
+#     market_equity = (last(abs(prc), order_by = date) * last(shrout, order_by = date)),
+#     
+#     n_days = n(),
+#     .groups = "drop"
+#   )
+# 
+# # 4. Nettoyage final
+# rm(crsp_light, skeleton_optimized) # On supprime les gros objets temporaires
+# gc() # On vide la RAM
+# 
+# # 5. Fusion avec le dataset principal
+# dataset_ready <- test_join_ccl_wd %>%
+#   left_join(final_features_aggregated, by = c("gvkey", "fyear"))
+```
+
+
+```{r}
+# # 0. Nettoyage initial
+# gc()
+# 
+# # --- ÉTAPE 1 : Préparation ---
+# crsp_light <- crsp_daily %>% select(permno, date, ret, prc, shrout)
+# 
+# # --- ÉTAPE 2 : La Jointure "Stricte" CORRIGÉE ---
+# 
+# # A. On pré-calcule la date limite (lookback limit) pour éviter le calcul dans le join
+# skeleton_prepared <- skeleton_with_permno %>%
+#   mutate(lookback_limit = prediction_start_date %m-% years(1))
+# 
+# # B. On fait la jointure avec des colonnes simples
+# features_strict <- skeleton_prepared %>%
+#   inner_join(crsp_light, join_by(permno, 
+#                                  prediction_start_date >= date, 
+#                                  lookback_limit < date)) %>% # Plus de calcul ici !
+#   group_by(gvkey, fyear, prediction_start_date) %>%
+#   summarise(
+#     sigma_E = sd(ret, na.rm = TRUE) * sqrt(252),
+#     past_ret = exp(sum(log(1 + ret), na.rm = TRUE)) - 1,
+#     market_equity = (last(abs(prc), order_by = date) * last(shrout, order_by = date)),
+#     last_date = max(date),
+#     source = "strict",
+#     .groups = "drop"
+#   )
+# 
+# # Nettoyage intermédiaire
+# rm(skeleton_prepared) 
+# gc()
+# 
+# # --- ÉTAPE 3 : Identification des Manquants ---
+# # (Le reste du code reste identique, je le remets pour être sûr de l'enchaînement)
+# 
+# missing_skeleton <- skeleton_with_permno %>%
+#   anti_join(features_strict, by = c("gvkey", "fyear"))
+# 
+# # --- ÉTAPE 4 : La Mission de Sauvetage (Rescue) ---
+# features_rescued <- missing_skeleton %>%
+#   left_join(crsp_light, by = "permno") %>% 
+#   filter(date <= prediction_start_date) %>%
+#   group_by(gvkey, fyear, prediction_start_date) %>%
+#   summarise(
+#     sigma_E = sd(tail(ret, 252), na.rm = TRUE) * sqrt(252), 
+#     past_ret = exp(sum(log(1 + tail(ret, 252)), na.rm = TRUE)) - 1,
+#     market_equity = (last(abs(prc), order_by = date) * last(shrout, order_by = date)),
+#     last_date = max(date),
+#     source = "rescued",
+#     .groups = "drop"
+#   )
+# 
+# # === 🧹 NETTOYAGE RAM 1 ===
+# rm(crsp_light, missing_skeleton)
+# gc()
+# 
+# # --- ÉTAPE 5 : Fusion ---
+# all_features <- bind_rows(features_strict, features_rescued)
+# 
+# # === 🧹 NETTOYAGE RAM 2 ===
+# rm(features_strict, features_rescued)
+# gc()
+# 
+# # --- ÉTAPE 6 : Imputation Finale ---
+# defaults_stats <- all_features %>%
+#   filter(source == "rescued") %>%
+#   summarise(
+#     median_sigma = median(sigma_E, na.rm = TRUE),
+#     median_ret = median(past_ret, na.rm = TRUE)
+#   )
+# 
+# final_features_clean <- all_features %>%
+#   mutate(
+#     sigma_E = ifelse(is.na(sigma_E), defaults_stats$median_sigma, sigma_E),
+#     past_ret = ifelse(is.na(past_ret), defaults_stats$median_ret, past_ret),
+#     gap_days = as.numeric(prediction_start_date - last_date)
+#   )
+# 
+# # === 🧹 NETTOYAGE RAM 3 ===
+# rm(all_features, defaults_stats)
+# gc()
+# 
+# # --- ÉTAPE 7 : Fusion avec le Dataset Principal ---
+# dataset_ready <- test_join_ccl_wd %>%
+#   left_join(final_features_clean, by = c("gvkey", "fyear", "prediction_start_date"))
+# 
+# print("Terminé !")
+```
+
+```{r}
+# 0. Nettoyage
+gc()
+
+# --- A. PRÉPARATION DU LIEN (LINK TABLE) ---
+link_table_clean <- ccmxpf_linktable %>%
+  select(gvkey, permno, linkdt, linkenddt) %>%
+  mutate(linkenddt = replace_na(linkenddt, today()))
+
+# --- B. CRÉATION DU SQUELETTE INTELLIGENT (Corrigé) ---
+skeleton_sticky <- test_join_ccl_wd %>%
+  # On ajoute relationship = "many-to-many" pour valider l'opération explicitement
+  inner_join(link_table_clean, by = "gvkey", relationship = "many-to-many") %>%
+  
+  # 1. On ne garde que les liens qui ont COMMENCÉ avant ou pendant notre historique
+  # (C'est ici qu'on nettoie l'explosion créée par la jointure)
+  filter(linkdt <= prediction_start_date) %>%
+  
+  # 2. LA MAGIE : On trie pour mettre les liens les plus récents en premier
+  # Si une entreprise a plusieurs PERMNO valides, on veut celui qui finit le plus tard
+  arrange(gvkey, fyear, desc(linkenddt)) %>%
+  
+  # 3. On prend le MEILLEUR lien pour chaque année
+  group_by(gvkey, fyear) %>%
+  slice(1) %>% # On ne garde qu'une seule ligne par année (le bon PERMNO)
+  ungroup() %>%
+  
+  select(gvkey, fyear, prediction_start_date, permno, linkenddt)
+# Vérification rapide : Est-ce que tes années 87-88 sont là maintenant ?
+# Elles devraient y être, avec le linkenddt de 86.
+```
+
+```{r}
+library(data.table)
+
+# 0. Nettoyage
+rm(list = setdiff(ls(), c("test_join_ccl_wd", "skeleton_sticky", "crsp_daily")))
+gc()
+
+# --- 1. CONVERSION EN DATA.TABLE ---
+# On convertit uniquement les colonnes utiles
+dt_crsp <- as.data.table(crsp_daily)[, .(permno, date, ret, prc, shrout)]
+dt_skeleton <- as.data.table(skeleton_sticky)
+
+# Indexation pour la vitesse
+setkey(dt_crsp, permno, date)
+
+# --- 2. PRÉPARATION DES BORNES ---
+# On définit la fenêtre [Pred - 3 ans, Pred]
+dt_skeleton[, `:=`(
+  window_end = prediction_start_date,
+  window_start = prediction_start_date %m-% years(3)
+)]
+
+# --- 3. LA JOINTURE (Correction) ---
+# On joint. Le résultat 'dt_joined' contiendra 'date' (de CRSP) et 'prediction_start_date' (de skeleton)
+dt_joined <- dt_crsp[dt_skeleton, 
+                     on = .(permno, date >= window_start, date <= window_end), 
+                     nomatch = NULL]
+
+# --- 4. AGRÉGATION (Correction du bug "window_end") ---
+final_features_dt <- dt_joined[, .(
+  # On trie par 'date' (la colonne de CRSP)
+  # On prend les 252 dernières observations disponibles
+  sigma_E = sd(tail(ret[order(date)], 252), na.rm = TRUE) * sqrt(252),
+  
+  past_ret = exp(sum(log(1 + tail(ret[order(date)], 252)), na.rm = TRUE)) - 1,
+  
+  # Market Cap (Dernier prix connu)
+  market_equity = (last(abs(prc)[order(date)]) * last(shrout)[order(date)]),
+  
+  # Pour calculer le gap (ancienneté de l'info)
+  last_trade_date = max(date)
+  
+), by = .(gvkey, fyear, prediction_start_date)] # <--- ON GROUPE PAR prediction_start_date ICI
+
+# --- 5. IMPUTATION & RETOUR VERS DPLYR ---
+# On reste en data.table pour modifier "sur place" (Zéro copie mémoire)
+# 1. Calcul du gap
+final_features_dt[, gap_days := as.numeric(prediction_start_date - last_trade_date)]
+
+# 2. Calcul des stats pour l'imputation
+# On utilise la syntaxe rapide de data.table
+bad_stats <- final_features_dt[gap_days > 365, .(
+  med_sigma = median(sigma_E, na.rm = TRUE),
+  med_ret = median(past_ret, na.rm = TRUE)
+)]
+
+# Valeurs de sécurité
+safe_sigma <- if(is.na(bad_stats$med_sigma)) 0.8 else bad_stats$med_sigma
+safe_ret <- if(is.na(bad_stats$med_ret)) -0.5 else bad_stats$med_ret
+
+# 3. Imputation directe (très rapide)
+# On remplace les NA par les valeurs de sécurité
+# setnafill ou fcoalesce sont optimisés, mais ifelse marche aussi
+final_features_dt[is.na(sigma_E), sigma_E := safe_sigma]
+final_features_dt[is.na(past_ret), past_ret := safe_ret]
+final_features_dt[is.na(market_equity), market_equity := 0.01]
+
+# Nettoyage colonnes inutiles pour alléger
+final_features_dt[, `:=`(gap_days = NULL, last_trade_date = NULL)]
+
+# 4. FUSION FINALE (Optimisée)
+# On transforme ton dataset principal en data.table juste le temps de la fusion
+dt_main <- as.data.table(test_join_ccl_wd)
+
+# Jointure très rapide sur les clés
+# On fusionne sur gvkey, fyear, et prediction_start_date
+gc()
+if (!is.data.table(dt_main)) setDT(dt_main)
+
+# 2. LA MAGIE : Mise à jour "Sur Place" (Update join)
+# Syntaxe : Tableau_Principal[Tableau_Source, Colonne_A_Ajouter := i.Colonne_Source, on = Clés]
+# Le 'i.' signifie "vient du tableau source (inside)"
+
+dt_main[final_features_dt, 
+        `:=` (
+          sigma_E = i.sigma_E,
+          past_ret = i.past_ret,
+          market_equity = i.market_equity
+        ), 
+        on = c("gvkey", "fyear", "prediction_start_date")]
+
+# À ce stade, dt_main contient DÉJÀ les nouvelles colonnes. Pas besoin de créer "dataset_ready".
+
+# 3. Sauvegarde immédiate
+saveRDS(dt_main, "dataset_final_complet.rds")
+
+print("Fusion réussie sans explosion de mémoire !")
+```
+
+```{r}
+total_market_cap_by_year <- dt_main %>%
+  group_by(fyear) %>%  # Pour chaque année (ex: 1990, 1991...)
+  summarise(
+    # On additionne la Market Cap de TOUTES les entreprises de cette année-là
+    total_market_val = sum(market_equity, na.rm = TRUE), 
+    .groups = "drop"
+  )
+```
+
+```{r}
+final_shumway_data <- dt_main %>%
+  left_join(total_market_cap_by_year, by = "fyear") %>%
+  
+  mutate(
+    # --- 1. GESTION DES UNITÉS ---
+    # Conversion Market Equity (CRSP milliers) en Millions pour matcher Compustat
+    ME_millions = market_equity / 1000,
+    
+    # --- 2. RATIOS COMPTABLES (Tes anciennes formules) ---
+    
+    # X1 : Working Capital / Total Assets (WCTA)
+    # Amélioration : Si la colonne 'wcap' est vide (NA), on la recalcule (Actif Court - Passif Court)
+    WCTA = ifelse(!is.na(wcap), wcap / at, (act - lct) / at),
+    
+    # X2 : Retained Earnings / Total Assets (RETA)
+    RETA = re / at,
+    
+    # X3 : EBIT / Total Assets (EBTA)
+    EBTA = ebit / at,
+    
+    # X5 : Sales / Total Assets (SLTA)
+    SLTA = sale / at,
+    
+    # --- 3. LA MISE À JOUR CRSP (Le vrai X4) ---
+    
+    # AVANT (Proxy) : TLTA = lt / at
+    # MAINTENANT (Vrai Altman) : Market Value Equity / Total Liabilities
+    METL = ME_millions / lt, 
+    
+    # --- 4. VARIABLES SHUMWAY (Pure Marché) ---
+    # Ces variables n'existent que grâce à CRSP
+    RELATIVE_SIZE = log(market_equity / total_market_val),
+    SIGMA = sigma_E,       # Volatilité
+    PAST_RET = past_ret    # Rendement passé
+  ) %>%
+  
+  # Nettoyage des divisions par zéro (Inf)
+  mutate(across(c(WCTA, RETA, EBTA, SLTA, METL), ~ ifelse(is.infinite(.), NA, .)))
+```
+
+```{r}
+saveRDS(final_shumway_data, "final_shumway_data.rds")
+```
+
+```{r}
+# Vérification des pertes
+check_loss <- dt_main %>%
+  # On regarde seulement les lignes qui sont des "Défauts futurs"
+  filter(default_1Y == 1) %>%
+  summarise(
+    total_defauts = n(),
+    defauts_avec_crsp = sum(!is.na(sigma_E)), # sigma_E vient de CRSP
+    defauts_sans_crsp = sum(is.na(sigma_E)),
+    pct_perdu = defauts_sans_crsp / total_defauts * 100
+  )
+
+print(check_loss)
+```
+
+```{r}
+# ==============================================================================
+# DICTIONNAIRE DES VARIABLES - DATASET FINAL (Shumway/Altman)
+# ==============================================================================
+
+# --- 1. IDENTIFIANTS & DATES --------------------------------------------------
+# [cite_start]gvkey                 : Identifiant unique entreprise (Source: Compustat) [cite: 83]
+# [cite_start]permno                : Identifiant unique action (Source: CRSP) [cite: 706]
+# conm                  : Nom de l'entreprise
+# fyear                 : Année fiscale (ex: 2000)
+# [cite_start]prediction_start_date : Date de la prédiction (Fin Fiscale + 6 mois de lag) [cite: 1366]
+
+# --- 2. VARIABLES CIBLES (Y) --------------------------------------------------
+# default_1Y            : 1 si défaut dans les 12 mois suivant la prediction_date
+# default_3Y            : 1 si défaut dans les 36 mois suivant la prediction_date
+# default_5Y            : 1 si défaut dans les 60 mois suivant la prediction_date
+# final_default_date    : Date exacte du premier défaut enregistré
+
+# --- 3. VARIABLES DU MODÈLE SHUMWAY (X - Marché) ------------------------------
+# [cite_start]SIGMA (sigma_E)       : Volatilité annualisée des rendements (Risque) [cite: 1030]
+# [cite_start]PAST_RET (past_ret)   : Rendement cumulé de l'action sur l'année passée [cite: 1030]
+# RELATIVE_SIZE         : log(Market Cap Entreprise / Market Cap Totale du Marché)
+# market_equity         : Capitalisation Boursière brute (Prix * Nb Actions)
+
+# --- 4. VARIABLES DU MODÈLE ALTMAN 1968 (X - Ratios) --------------------------
+# [cite_start]WCTA (X1)             : Working Capital / Total Assets (Liquidité) [cite: 1017]
+# [cite_start]RETA (X2)             : Retained Earnings / Total Assets (Profitabilité cumulée) [cite: 1018]
+# [cite_start]EBTA (X3)             : EBIT / Total Assets (Marge opérationnelle) [cite: 1019]
+# [cite_start]METL (X4)             : Market Equity / Total Liabilities (Levier financier réel) [cite: 1020]
+# [cite_start]SLTA (X5)             : Sales / Total Assets (Rotation des actifs) [cite: 1021]
+
+# --- 5. VARIABLES DE CONTRÔLE / BRUTES ----------------------------------------
+# at                    : Total Assets (Actifs Totaux)
+# lt                    : Total Liabilities (Dettes Totales)
+# ni                    : Net Income (Résultat Net)
+# gap_days              : Ancienneté de la donnée de marché (en jours)
+# ==============================================================================
+
+```
+
+
+# Dictionnaire des Variables
+
+| Variable | Description | Rôle / Modèle |
+| :--- | :--- | :--- |
+| **Identifiants** | | |
+| `gvkey` | Identifiant unique entreprise (Compustat) | Clé de jointure |
+| `permno` | Identifiant unique action (CRSP) | Clé de jointure |
+| `fyear` | Année fiscale | Temps |
+| `prediction_start_date` | Date de prédiction (Fin Fiscale + 6 mois) | Temps |
+| **Cibles (Y)** | | |
+| `default_1Y` | Défaut dans les 12 mois | Target |
+| `default_3Y` | Défaut dans les 36 mois | Target |
+| **Shumway (Marché)** | | |
+| `SIGMA` (`sigma_E`) | Volatilité annualisée des rendements | Risque |
+| `PAST_RET` (`past_ret`) | Rendement cumulé (1 an) | Performance passée |
+| `RELATIVE_SIZE` | log(Market Cap / Total Market) | Taille relative |
+| **Altman (Comptable)** | | |
+| `WCTA` | Working Capital / Total Assets | Liquidité ($X_1$) |
+| `RETA` | Retained Earnings / Total Assets | Profitabilité ($X_2$) |
+| `EBTA` | EBIT / Total Assets | Marge Ops ($X_3$) |
+| `METL` | Market Equity / Total Liabilities | Levier Marché ($X_4$) |
+| `SLTA` | Sales / Total Assets | Rotation ($X_5$) |
