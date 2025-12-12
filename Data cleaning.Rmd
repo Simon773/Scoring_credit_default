@@ -14,14 +14,16 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{r}
 library(DescTools)
 library(ggplot2)
+library(tidyverse)
 ```
 
 ```{r}
-data <- readRDS("data/df_joined.rds") 
+data <- readRDS("data/final_shumway_data.rds") 
 ```
 
 ```{r}
-data_ratio <- data %>% select(WCTA, WCTA2, RETA, EBTA, TLTA, SLTA, NITA, CACL)
+data_ratio <- data %>% select(WCTA, WCTA2, RETA, EBTA, TLTA, SLTA, SIGMA, PAST_RET, RELATIVE_SIZE, market_equity)
+#, NITA, CACL) variable pour Zmijewski qui ne sont pas dans la bdd final_shumway_data
 ```
 
 # Imputation
@@ -29,10 +31,11 @@ data_ratio <- data %>% select(WCTA, WCTA2, RETA, EBTA, TLTA, SLTA, NITA, CACL)
 Avec la moyenne
 
 ```{r}
-data[sapply(data, is.numeric)] <- lapply(
-  data[sapply(data, is.numeric)],
-  function(x) { x[is.infinite(x)] <- NA; x }
-)
+colonnes_numeriques <- names(data)[sapply(data, is.numeric)]
+data[, (colonnes_numeriques) := lapply(.SD, function(x) {
+    x[is.infinite(x)] <- NA
+    return(x)
+}), .SDcols = colonnes_numeriques]
 
 for (var in names(data_ratio)) {
   mean_val <- mean(data[[var]], na.rm = TRUE) 
@@ -42,12 +45,10 @@ for (var in names(data_ratio)) {
 
 # Winsorization
 
-```{r}
-data$WCTA_win <- Winsorize(data$WCTA, val= quantile(data$WCTA, probs = c(0.05, 0.95)))
-```
+### WCTA
 
 ```{r}
-ggplot(data, aes(x = WCTA_win, color = factor(default3), fill = factor(default3))) +
+ggplot(data, aes(x = WCTA, color = factor(default_1Y), fill = factor(default_1Y))) +
   geom_density(alpha = 0.4) +
   labs(title = "Densité des valeurs selon defaults",
        x = "Valeurs",
@@ -58,11 +59,24 @@ ggplot(data, aes(x = WCTA_win, color = factor(default3), fill = factor(default3)
 ```
 
 ```{r}
-data$EBTA_win <- Winsorize(data$EBTA, val= quantile(data$EBTA, probs = c(0.03, 0.95)))
+data$WCTA_win <- Winsorize(data$WCTA, val= quantile(data$WCTA, probs = c(0.05, 0.99)))
 ```
 
 ```{r}
-ggplot(data, aes(x = EBTA_win, color = factor(default3), fill = factor(default3))) +
+ggplot(data, aes(x = WCTA_win, color = factor(default_1Y), fill = factor(default_1Y))) +
+  geom_density(alpha = 0.4) +
+  labs(title = "Densité des valeurs selon defaults",
+       x = "Valeurs",
+       y = "Densité",
+       color = "Defaults",
+       fill = "Defaults") +
+  theme_minimal()
+```
+
+### EBTA
+
+```{r}
+ggplot(data, aes(x = EBTA, color = factor(default_1Y), fill = factor(default_1Y))) +
   geom_density(alpha = 0.4) +
   labs(title = "Densité des valeurs selon defaults",
        x = "Valeurs",
@@ -73,11 +87,24 @@ ggplot(data, aes(x = EBTA_win, color = factor(default3), fill = factor(default3)
 ```
 
 ```{r}
-data$RETA_win <- Winsorize(data$RETA, val= quantile(data$RETA, probs = c(0.1, 1)))
+data$EBTA_win <- Winsorize(data$EBTA, val= quantile(data$EBTA, probs = c(0.03, 0.99)))
 ```
 
 ```{r}
-ggplot(data, aes(x = RETA_win, color = factor(default3), fill = factor(default3))) +
+ggplot(data, aes(x = EBTA_win, color = factor(default_1Y), fill = factor(default_1Y))) +
+  geom_density(alpha = 0.4) +
+  labs(title = "Densité des valeurs selon defaults",
+       x = "Valeurs",
+       y = "Densité",
+       color = "Defaults",
+       fill = "Defaults") +
+  theme_minimal()
+```
+
+### RETA
+
+```{r}
+ggplot(data, aes(x = RETA, color = factor(default_1Y), fill = factor(default_1Y))) +
   geom_density(alpha = 0.4) +
   labs(title = "Densité des valeurs selon defaults",
        x = "Valeurs",
@@ -88,11 +115,24 @@ ggplot(data, aes(x = RETA_win, color = factor(default3), fill = factor(default3)
 ```
 
 ```{r}
-data$TLTA_win <- Winsorize(data$TLTA, val= quantile(data$TLTA, probs = c(0, 0.95)))
+data$RETA_win <- Winsorize(data$RETA, val= quantile(data$RETA, probs = c(0.05, 0.999)))
 ```
 
 ```{r}
-ggplot(data, aes(x = TLTA_win, color = factor(default3), fill = factor(default3))) +
+ggplot(data, aes(x = RETA_win, color = factor(default_1Y), fill = factor(default_1Y))) +
+  geom_density(alpha = 0.4) +
+  labs(title = "Densité des valeurs selon defaults",
+       x = "Valeurs",
+       y = "Densité",
+       color = "Defaults",
+       fill = "Defaults") +
+  theme_minimal()
+```
+
+### TLTA
+
+```{r}
+ggplot(data, aes(x = TLTA, color = factor(default_1Y), fill = factor(default_1Y))) +
   geom_density(alpha = 0.4) +
   labs(title = "Densité des valeurs selon defaults",
        x = "Valeurs",
@@ -103,11 +143,24 @@ ggplot(data, aes(x = TLTA_win, color = factor(default3), fill = factor(default3)
 ```
 
 ```{r}
-data$SLTA_win <- Winsorize(data$SLTA, val= quantile(data$SLTA, probs = c(0.05, 0.95)))
+data$TLTA_win <- Winsorize(data$TLTA, val= quantile(data$TLTA, probs = c(0, 0.99)))
 ```
 
 ```{r}
-ggplot(data, aes(x = SLTA_win, color = factor(default3), fill = factor(default3))) +
+ggplot(data, aes(x = TLTA_win, color = factor(default_1Y), fill = factor(default_1Y))) +
+  geom_density(alpha = 0.4) +
+  labs(title = "Densité des valeurs selon defaults",
+       x = "Valeurs",
+       y = "Densité",
+       color = "Defaults",
+       fill = "Defaults") +
+  theme_minimal()
+```
+
+### SLTA
+
+```{r}
+ggplot(data, aes(x = SLTA, color = factor(default_1Y), fill = factor(default_1Y))) +
   geom_density(alpha = 0.4) +
   labs(title = "Densité des valeurs selon defaults",
        x = "Valeurs",
@@ -118,11 +171,11 @@ ggplot(data, aes(x = SLTA_win, color = factor(default3), fill = factor(default3)
 ```
 
 ```{r}
-data$NITA_win <- Winsorize(data$NITA, val= quantile(data$NITA, probs = c(0.05, 0.95)))
+data$SLTA_win <- Winsorize(data$SLTA, val= quantile(data$SLTA, probs = c(0.05, 0.99)))
 ```
 
 ```{r}
-ggplot(data, aes(x = NITA_win, color = factor(default3), fill = factor(default3))) +
+ggplot(data, aes(x = SLTA_win, color = factor(default_1Y), fill = factor(default_1Y))) +
   geom_density(alpha = 0.4) +
   labs(title = "Densité des valeurs selon defaults",
        x = "Valeurs",
@@ -132,14 +185,174 @@ ggplot(data, aes(x = NITA_win, color = factor(default3), fill = factor(default3)
   theme_minimal()
 ```
 
-# Replace NA dans default3
+### NITA #pas dans la base
 
 ```{r}
-data$default3[is.na(data$default3)] <- 0
+# data$NITA_win <- Winsorize(data$NITA, val= quantile(data$NITA, probs = c(0.05, 0.95)))
+```
+
+```{r}
+# ggplot(data, aes(x = NITA_win, color = factor(default3), fill = factor(default3))) +
+#   geom_density(alpha = 0.4) +
+#   labs(title = "Densité des valeurs selon defaults",
+#        x = "Valeurs",
+#        y = "Densité",
+#        color = "Defaults",
+#        fill = "Defaults") +
+#   theme_minimal()
+```
+
+# Variables defaults
+
+```{r}
+data %>% select(default_1Y, default_3Y, default_5Y) %>% summary()
+```
+
+```{r}
+data <- data %>%
+  mutate(final_default_date = as.Date(final_default_date, format = "%Y-%m-%d"))
+data$final_default_date %>% summary()
+```
+
+# Variable de Shumway
+
+### SIGMA
+
+```{r}
+ggplot(data, aes(x = SIGMA, color = factor(default_1Y), fill = factor(default_1Y))) +
+  geom_density(alpha = 0.4) +
+  labs(title = "Densité des valeurs selon defaults",
+       x = "Valeurs",
+       y = "Densité",
+       color = "Defaults",
+       fill = "Defaults") +
+  theme_minimal()
+```
+
+```{r}
+data$SIGMA_win <- Winsorize(data$SIGMA, val= quantile(data$SIGMA, probs = c(0, 0.95)))
+```
+
+```{r}
+ggplot(data, aes(x = SIGMA_win, color = factor(default_1Y), fill = factor(default_1Y))) +
+  geom_density(alpha = 0.4) +
+  labs(title = "Densité des valeurs selon defaults",
+       x = "Valeurs",
+       y = "Densité",
+       color = "Defaults",
+       fill = "Defaults") +
+  theme_minimal()
+```
+
+### PAST RET
+
+```{r}
+ggplot(data, aes(x = PAST_RET, color = factor(default_1Y), fill = factor(default_1Y))) +
+  geom_density(alpha = 0.4) +
+  labs(title = "Densité des valeurs selon defaults",
+       x = "Valeurs",
+       y = "Densité",
+       color = "Defaults",
+       fill = "Defaults") +
+  theme_minimal()
+```
+
+```{r}
+data$PAST_RET_win <- Winsorize(data$PAST_RET, val= quantile(data$PAST_RET, probs = c(0.1, 0.9)))
+```
+
+```{r}
+ggplot(data, aes(x = PAST_RET_win, color = factor(default_1Y), fill = factor(default_1Y))) +
+  geom_density(alpha = 0.4) +
+  labs(title = "Densité des valeurs selon defaults",
+       x = "Valeurs",
+       y = "Densité",
+       color = "Defaults",
+       fill = "Defaults") +
+  theme_minimal()
+```
+
+### RELATIVE_SIZE
+
+```{r}
+ggplot(data, aes(x = RELATIVE_SIZE, color = factor(default_1Y), fill = factor(default_1Y))) +
+  geom_density(alpha = 0.4) +
+  labs(title = "Densité des valeurs selon defaults",
+       x = "Valeurs",
+       y = "Densité",
+       color = "Defaults",
+       fill = "Defaults") +
+  theme_minimal()
+```
+
+```{r}
+data$RELATIVE_SIZE_win <- Winsorize(data$RELATIVE_SIZE, val= quantile(data$RELATIVE_SIZE, probs = c(0.1, 0.9)))
+```
+
+```{r}
+ggplot(data, aes(x = RELATIVE_SIZE_win, color = factor(default_1Y), fill = factor(default_1Y))) +
+  geom_density(alpha = 0.4) +
+  labs(title = "Densité des valeurs selon defaults",
+       x = "Valeurs",
+       y = "Densité",
+       color = "Defaults",
+       fill = "Defaults") +
+  theme_minimal()
+```
+
+### market equity
+
+```{r}
+ggplot(data, aes(x = market_equity, color = factor(default_1Y), fill = factor(default_1Y))) +
+  geom_density(alpha = 0.4) +
+  labs(title = "Densité des valeurs selon defaults",
+       x = "Valeurs",
+       y = "Densité",
+       color = "Defaults",
+       fill = "Defaults") +
+  theme_minimal()
+```
+
+```{r}
+data$market_equity_win <- Winsorize(data$market_equity, val= quantile(data$market_equity, probs = c(0, 0.999)))
+```
+
+```{r}
+ggplot(data, aes(x = market_equity_win, color = factor(default_1Y), fill = factor(default_1Y))) +
+  geom_density(alpha = 0.4) +
+  labs(title = "Densité des valeurs selon defaults",
+       x = "Valeurs",
+       y = "Densité",
+       color = "Defaults",
+       fill = "Defaults") +
+  theme_minimal()
+```
+
+### Industry
+
+```{r}
+ggplot(data = data[default_1Y==1], aes(x = industry, color = factor(default_1Y), fill = factor(default_1Y)))+
+  geom_bar(position = "dodge") +
+  labs(title = "Nombre de défauts par industrie",
+       x = "Valeurs",
+       y = "Nombre",
+       color = "Defaults",
+       fill = "Defaults") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  theme_minimal()
+```
+
+Suppression de Agriculture, Finance, Mining, Public
+
+```{r}
+rem_ind <- c("Agriculture", "Finance", "Mining", "Public")
+data_industry <- data %>% filter(! industry %in% rem_ind)
+nrow(data_industry) != nrow(data) #doit être TRUE
+nrow(data_industry)
 ```
 
 # Export
 
 ```{r}
-saveRDS(data, "data/df_winsorized.rds")
+saveRDS(data_industry, "data/df_winsorized.rds")
 ```
