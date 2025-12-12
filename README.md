@@ -23,15 +23,15 @@ Project of scoring with Loan, Maëlys and Nathan and Simon
 * méthodes d'oversampling ? $\rightarrow$ pour le moment juste point dans régression logistique
 * théorie modèle de survie : pourquoi, comment, quelles variables $\rightarrow$ Nathan $\rightarrow$ abandon ?
 * assessment of the models: ROC Curve? ROC Curve vs accuracy? Moodys? $\rightarrow$ Maëlys (finir Moodys) et Simon (dvp metrics pour année)
-  * Attention dans les CV au time split (dans le test on doit avoir que le futur) $\rigtharrow$ **à corriger**
+  * Attention dans les CV au time split (dans le test on doit avoir que le futur) $\rightarrow$ **à corriger**
   * Attention au seuil auquel on regarde les metrics $\rightarrow$ **à faire**
 * diapo $\rightarrow$ fait
 * Analyse des NA en fonction des années $\rightarrow$ prendre les années plus récentes $\rightarrow$ **?**
 * Ajout du mois ? $\rightarrow$ **?**
 
-~~Objectives for December: 
-* fine-tuning of the model $\rightarrow$ Simon
-* modèle de survie~~
+### Objectives for December: 
+~~* fine-tuning of the model $\rightarrow$ Simon~~
+~~* modèle de survie~~
 
 ### A faire pour le rapport
 * revoir le train/test split
