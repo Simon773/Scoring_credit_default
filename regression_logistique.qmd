@@ -9,11 +9,13 @@ editor: visual
 ```{r}
 library(tidyverse)
 library(DescTools)
+library(glmnet)
+library(scales)
 ```
 
 ```{r}
 data <- readRDS("data/df_winsorized.rds")
-data %>% select(default3, WCTA, RETA, EBTA, TLTA, SLTA) %>% summary()
+data %>% select(default_1Y, default_3Y, default_5Y, WCTA, RETA, EBTA, TLTA, SLTA) %>% summary()
 ```
 
 ```         
@@ -25,14 +27,14 @@ data %>% select(default3, WCTA, RETA, EBTA, TLTA, SLTA) %>% summary()
 # data_altman <- data  %>%
 #   mutate(across(c(WCTA, RETA, EBTA, TLTA, SLTA),
 #                 ~ replace(., is.infinite(.), NA)))
-data_altman <- data %>% drop_na(WCTA, RETA, EBTA, TLTA, SLTA)
-data_altman %>% select(default3, WCTA, RETA, EBTA, TLTA, SLTA) %>% summary()
+data_altman <- data %>% drop_na(WCTA, RETA, EBTA, TLTA, SLTA) #ça ne devrait supprimer aucune ligne puisque mean_imputation dans le code d'avant
+data_altman %>% select(default_1Y, WCTA, RETA, EBTA, TLTA, SLTA) %>% summary()
 ```
 
 Revoir le traitement des variables manquantes
 
 ```{r}
-altman_model <- glm(default3 ~ WCTA + RETA + EBTA + TLTA + SLTA, family="binomial", data = data_altman)
+altman_model <- glm(default_1Y ~ WCTA + RETA + EBTA + TLTA + SLTA, family="binomial", data = data_altman)
 summary(altman_model)
 ```
 
@@ -42,11 +44,11 @@ Modèle qui ajoute des poids (inverse de la fréquence):
 
 ```{r}
 #Creation of the weights
-freq <- table(data_altman$default3)
-data_altman$weights <- 1 / freq[match(data_altman$default3, names(freq))]
+freq <- table(data_altman$default_1Y)
+data_altman$weights <- 1 / freq[match(data_altman$default_1Y, names(freq))]
 
 #Model
-altman_model_weights <- glm(default3 ~ WCTA + RETA + EBTA + TLTA + SLTA, family="binomial", weights = weights, data = data_altman)
+altman_model_weights <- glm(default_1Y ~ WCTA + RETA + EBTA + TLTA + SLTA, family="binomial", weights = weights, data = data_altman)
 summary(altman_model_weights)
 ```
 
@@ -54,44 +56,111 @@ Les résultats sont très mauvais (cf proba dans le summary). On fait donc des p
 
 ```{r}
 # Calculer proportion
-prop <- prop.table(table(data_altman$default3))
+prop <- prop.table(table(data_altman$default_1Y))
 data_altman <- data_altman %>%
-  mutate(weights_2 = 1 / prop[match(default3, names(prop))])
+  mutate(weights_1Y = 1 / prop[match(default_1Y, names(prop))])
 
 # Normaliser pour que la moyenne des poids = 1
-data_altman$weights_prop <- data_altman$weights_2 / mean(data_altman$weights_2)
+data_altman$weights_prop <- data_altman$weights_1Y / mean(data_altman$weights_1Y)
 ```
 
 ```{r}
-altman_model_weights_prop <- glm(default3 ~ WCTA + RETA + EBTA + TLTA + SLTA, family="binomial", weights = weights_prop, data = data_altman)
+altman_model_weights_prop <- glm(default_1Y ~ WCTA + RETA + EBTA + TLTA + SLTA, family="binomial", weights = weights_prop, data = data_altman)
 summary(altman_model_weights_prop)
 ```
 
-Les résultats sont meilleurs : EBTA, SLTA, RETA significatif à 5%.
+Les résultats sont meilleurs : toutes les variables sauf EBTA sont significatives à 5%.
+
+On fait le même modèle avec default_3Y
+
+```{r}
+# Calculer proportion
+prop <- prop.table(table(data_altman$default_3Y))
+data_altman <- data_altman %>%
+  mutate(weights_3Y = 1 / prop[match(default_3Y, names(prop))])
+
+# Normaliser pour que la moyenne des poids = 1
+data_altman$weights_prop_3Y <- data_altman$weights_3Y / mean(data_altman$weights_3Y)
+```
+
+```{r}
+altman_model_weights_prop_3Y <- glm(default_3Y ~ WCTA + RETA + EBTA + TLTA + SLTA, family="binomial", weights = weights_prop_3Y, data = data_altman)
+summary(altman_model_weights_prop_3Y)
+```
+
+Tout est significatif.
+
+On pourrait faire avec default_5Y mais on va d'abord appliquer les winsorized variables.
 
 ## Winsorized variables
 
 ```{r}
 data_altman_win <- data %>% drop_na(WCTA_win, RETA_win, EBTA_win, TLTA_win, SLTA_win)
-data_altman_win %>% select(default3, WCTA_win, RETA_win, EBTA_win, TLTA_win, SLTA_win) %>% summary()
+data_altman_win %>% select(default_1Y, default_3Y, default_5Y, WCTA_win, RETA_win, EBTA_win, TLTA_win, SLTA_win) %>% summary()
 ```
 
 ```{r}
 # Calculer proportion
-prop <- prop.table(table(data_altman_win$default3))
+prop <- prop.table(table(data_altman_win$default_1Y))
 data_altman_win <- data_altman_win %>%
-  mutate(weights_2 = 1 / prop[match(default3, names(prop))])
+  mutate(weights_1Y = 1 / prop[match(default_1Y, names(prop))])
 
 # Normaliser pour que la moyenne des poids = 1
-data_altman_win$weights_prop <- data_altman_win$weights_2 / mean(data_altman_win$weights_2)
+data_altman_win$weights_prop <- data_altman_win$weights_1Y / mean(data_altman_win$weights_1Y)
 ```
 
 ```{r}
-altman_model_weights_prop <- glm(default3 ~ WCTA_win + RETA_win + EBTA_win + TLTA_win + SLTA_win, family="binomial", weights = weights_prop, data = data_altman_win)
+altman_model_weights_prop <- glm(default_1Y ~ WCTA_win + RETA_win + EBTA_win + TLTA_win + SLTA_win, family="binomial", weights = weights_prop, data = data_altman_win)
 summary(altman_model_weights_prop)
 ```
 
+Tout est significatif mais moins bon que sans winzorization (la winsorization est bonne si on garde toutes les industries mais on en a enlevé certaines)
+
+Avec default_3Y
+
+```{r}
+# Calculer proportion
+prop <- prop.table(table(data_altman_win$default_3Y))
+data_altman_win <- data_altman_win %>%
+  mutate(weights_3Y = 1 / prop[match(default_3Y, names(prop))])
+
+# Normaliser pour que la moyenne des poids = 1
+data_altman_win$weights_prop_3Y <- data_altman_win$weights_3Y / mean(data_altman_win$weights_3Y)
+```
+
+```{r}
+altman_model_weights_prop_3Y <- glm(default_3Y ~ WCTA_win + RETA_win + EBTA_win + TLTA_win + SLTA_win, family="binomial", weights = weights_prop, data = data_altman_win)
+summary(altman_model_weights_prop_3Y)
+```
+
+Toutes les variables sont significatives, meilleur AIC pour default_3Y (pour les modèles winsorizés) et légèrement meilleur que default_3Y sans winzorisation
+
+Avec default_5Y
+
+```{r}
+# Calculer proportion
+prop <- prop.table(table(data_altman_win$default_5Y))
+data_altman_win <- data_altman_win %>%
+  mutate(weights_5Y = 1 / prop[match(default_5Y, names(prop))])
+
+# Normaliser pour que la moyenne des poids = 1
+data_altman_win$weights_prop_5Y <- data_altman_win$weights_5Y / mean(data_altman_win$weights_5Y)
+```
+
+```{r}
+altman_model_weights_prop_5Y <- glm(default_5Y ~ WCTA_win + RETA_win + EBTA_win + TLTA_win + SLTA_win, family="binomial", weights = weights_prop, data = data_altman_win)
+summary(altman_model_weights_prop_5Y)
+```
+
+Variables toutes significatives mais moins bon AIC
+
+=\> On garde default_3Y avec les variables winsorisés.
+
 # Zmijewski's ratios (1984)
+
+::: warning
+**Attention !** Cette partie ne fonctionne pas car les variables ne sont pas dans le dataset. (il faut retourner le code de Maëlys)
+:::
 
 (NI/TA, TL/TA, CA/CL)
 
@@ -133,6 +202,8 @@ Toutes les variables sont significatives à 5%.
 
 # Test avec tous les ratios
 
+A faire ?
+
 # Others variables
 
 ## Industries
@@ -140,11 +211,11 @@ Toutes les variables sont significatives à 5%.
 ### Altman's ratio
 
 ```{r}
-altman_model_industry <- glm(default2 ~ WCTA + RETA + EBTA + TLTA + SLTA + industry, family="binomial", weights = weights_prop, data = data_altman)
+altman_model_industry <- glm(default_3Y ~ WCTA_win + RETA_win + EBTA_win + TLTA_win + SLTA_win + industry, family="binomial", weights = weights_prop_3Y, data = data_altman_win)
 summary(altman_model_industry)
 ```
 
-Industrie très significatif
+Industrie très significatif et meilleur AIC que le modèle sans industrie
 
 ### Zmijewski's ratio
 
@@ -155,6 +226,248 @@ summary(zmijewski_model)
 
 Toutes les variables sont signicatives.
 
-## Autre variable à ajouter ?
+## Variables de Shumway
+
+```{r}
+altman_model_shumway <- glm(default_3Y ~ WCTA_win + RETA_win + EBTA_win + TLTA_win + SLTA_win + industry + SIGMA + PAST_RET + RELATIVE_SIZE, family="binomial", weights = weights_prop_3Y, data = data_altman_win)
+summary(altman_model_shumway)
+```
+
+Tout est significatif et meilleur AIC
+
+On tente un LASSO pour voir
+
+```{r}
+formula_lasso <- default_3Y ~ WCTA_win + RETA_win + EBTA_win + TLTA_win + SLTA_win + industry + SIGMA + PAST_RET + RELATIVE_SIZE
+data_LASSO <- model.matrix(formula_lasso, data = data_altman_win)[,-1] #pour enlever l'intercept
+```
+
+```{r}
+altman_model_shumway_lasso <- cv.glmnet(
+    x = data_LASSO,
+    y = data_altman_win$default_3Y,
+    alpha = 1,
+    family = "binomial",
+    weights = data_altman_win$weights_prop_3Y
+)
+```
+
+```{r}
+plot(altman_model_shumway_lasso)
+```
+
+```{r}
+lambda_best <- altman_model_shumway_lasso$lambda.1se
+coeff_lasso <- coef(altman_model_shumway_lasso, s = lambda_best)
+coeff_lasso
+```
+
+Seul SLTA n'est pas inclut dans le modèle (je crois que ça correspond à ce que disais les articles : pris tout seul il ne sert à rien, significatif avec les autres ratios mais inutile quand on rajoute shumway)
 
 # ROC Curve
+
+### Préparation des données
+
+On va faire un train / test split (sans prendre en compte le temps) puis recalculer les modèles pour avoir les prédictions.
+
+```{r}
+set.seed(42)
+size <- nrow(data_altman_win) * 0.8
+indices <- sample.int(nrow(data_altman_win), size)
+
+data_train <- data_altman_win[indices, ]
+data_train_lasso <- model.matrix(formula_lasso, data = data_train)[,-1]
+data_test <- data_altman_win[-indices, ]
+data_test_lasso <- model.matrix(formula_lasso, data = data_test)[,-1]
+```
+
+```{r}
+altman_model_winsorized_1Y <- glm(default_1Y ~ WCTA_win + RETA_win + EBTA_win + TLTA_win + SLTA_win, family="binomial", weights = weights_prop, data = data_train)
+altman_model_winsorized_3Y <- glm(default_3Y ~ WCTA_win + RETA_win + EBTA_win + TLTA_win + SLTA_win, family="binomial", weights = weights_prop_3Y, data = data_train)
+altman_model_industry <- glm(default_3Y ~ WCTA_win + RETA_win + EBTA_win + TLTA_win + SLTA_win + industry, family="binomial", weights = weights_prop_3Y, data = data_train)
+altman_model_shumway <- glm(default_3Y ~ WCTA_win + RETA_win + EBTA_win + TLTA_win + SLTA_win + industry + SIGMA + PAST_RET + RELATIVE_SIZE, family="binomial", weights = weights_prop_3Y, data = data_train)
+```
+
+```{r}
+pred_prob_winso <- predict(altman_model_winsorized_1Y, newdata = data_test, type = "response")
+pred_winso <- ROCR::prediction(pred_prob_winso, data_test$default_1Y)
+perf_winso <- ROCR::performance(pred_winso, measure = "tpr", x.measure = "fpr")
+
+auc_train <- ROCR::performance(pred_winso, measure = "auc")
+auc_winso <- auc_train@y.values[[1]]
+
+pred_prob_winso_3Y <- predict(altman_model_winsorized_3Y, newdata = data_test, type = "response")
+pred_winso_3Y <- ROCR::prediction(pred_prob_winso_3Y, data_test$default_3Y)
+perf_winso_3Y <- ROCR::performance(pred_winso_3Y, measure = "tpr", x.measure = "fpr")
+
+auc_train <- ROCR::performance(pred_winso_3Y, measure = "auc")
+auc_winso_3Y <- auc_train@y.values[[1]]
+
+pred_prob_industry <- predict(altman_model_industry, newdata = data_test, type = "response")
+pred_industry <- ROCR::prediction(pred_prob_industry, data_test$default_3Y)
+perf_industry <- ROCR::performance(pred_industry, measure = "tpr", x.measure = "fpr")
+
+auc_train <- ROCR::performance(pred_industry, measure = "auc")
+auc_industry <- auc_train@y.values[[1]]
+
+pred_prob_shumway <- predict(altman_model_shumway, newdata = data_test, type = "response")
+pred_shumway <- ROCR::prediction(pred_prob_shumway, data_test$default_3Y)
+perf_shumway <- ROCR::performance(pred_shumway, measure = "tpr", x.measure = "fpr")
+
+auc_train <- ROCR::performance(pred_shumway, measure = "auc")
+auc_shumway <- auc_train@y.values[[1]]
+
+pred_prob_shumway_lasso <- predict(altman_model_shumway_lasso, newx = data_test_lasso, s = lambda_best, type = "response")
+pred_shumway_lasso <- ROCR::prediction(pred_prob_shumway_lasso, data_test$default_3Y)
+perf_shumway_lasso <- ROCR::performance(pred_shumway_lasso, measure = "tpr", x.measure = "fpr")
+
+auc_train <- ROCR::performance(pred_shumway_lasso, measure = "auc")
+auc_shumway_lasso <- auc_train@y.values[[1]]
+```
+
+```{r}
+auc <- cbind(auc_winso, auc_winso_3Y, auc_industry, auc_shumway, auc_shumway_lasso)
+auc
+```
+
+ROC Curve
+
+```{r}
+plot(perf_winso, main="ROC curve Admissions", xlab="Specificity",
+     ylab="Sensitivity", col = "darkorange")
+plot(perf_winso_3Y, col = "lightblue", add = TRUE)
+plot(perf_industry, col = "coral", add = TRUE)
+plot(perf_shumway, col = "lightgreen", add = TRUE)
+plot(perf_shumway_lasso, col = "lightpink", add = TRUE)
+abline(0, 1) #add a 45 degree line
+legend("bottomright",legend = c("default_1Y - Winsorized", "default_3Y - Winsorized", "default_3Y  Winso + industry", "default_3Y - Winso + ind + shumway", "default_3Y - Shumway - Lasso"),
+       col = c("darkorange", "lightblue", "coral","lightgreen","lightpink"),
+       lwd = 2)
+```
+
+Default_1Y est pire que l'aléatoire. Pour les autres ça dépend du seuil
+
+# CAP Curve
+
+```{r}
+data_res <- data_test
+data_res$winso <- pred_prob_winso
+data_res$winso_3Y <- pred_prob_winso_3Y
+data_res$industry <- pred_prob_industry
+data_res$shumway <- pred_prob_shumway
+data_res$shumway_lasso <- pred_prob_shumway_lasso
+```
+
+Code par Gemini
+
+```{r}
+# --- 2. FONCTION DE CALCUL CAP (à définir) ---
+calculate_cap <- function(data, score_var, default_var) {
+  # Renommer temporairement pour faciliter l'utilisation
+  data <- data %>%
+    rename(score = {{ score_var }},
+           default = {{ default_var }})
+
+  # Trier les entreprises par score (risque) décroissant : 
+  # Les scores les plus élevés (risque le plus grand) sont en haut.
+  data_sorted <- data %>%
+    arrange(desc(score)) %>%
+    # Calculer le total des défauts et le total des entreprises
+    mutate(
+      total_defaults = sum(default),
+      total_companies = n()
+    )
+
+  # Créer le profil cumulatif
+  cap_data <- data_sorted %>%
+    # Créer les colonnes cumulatives
+    mutate(
+      cumulative_defaults = cumsum(default),
+      cumulative_companies = row_number()
+    ) %>%
+    # Calculer les pourcentages (les axes de la courbe)
+    mutate(
+      x_axis = cumulative_companies / total_companies,        # % d'entreprises sélectionnées (x)
+      y_axis = cumulative_defaults / total_defaults           # % de défauts capturés (y)
+    ) %>%
+    # Conserver les colonnes nécessaires (une ligne pour chaque entreprise)
+    select(x_axis, y_axis)
+
+  # Ajouter les points de début (0, 0) et de fin (1, 1) et le point de "sélection aléatoire" (x, x)
+  cap_final <- bind_rows(
+    tibble(x_axis = 0, y_axis = 0),
+    cap_data,
+    tibble(x_axis = 1, y_axis = 1)
+  ) %>%
+    # Supprimer les doublons pour avoir une courbe propre
+    distinct()
+
+  return(cap_final)
+}
+
+# --- 3. EXÉCUTION DE LA FONCTION ---
+# Remplacez 'data' par le nom de votre jeu de données et les colonnes correspondantes
+cap_winso <- calculate_cap(
+  data = data_res,
+  score_var = winso, # Utilisez la colonne de prédiction de votre modèle
+  default_var = default_1Y
+) %>% mutate(Model = "winso")
+cap_winso_3Y <- calculate_cap(data_res, winso_3Y, default_3Y) %>% mutate(Model = "winso_3Y")
+cap_industry <- calculate_cap(data_res, industry, default_3Y) %>% mutate(Model = "industry")
+cap_shumway <- calculate_cap(data_res, shumway, default_3Y) %>% mutate(Model = "shumway")
+cap_shumway_lasso <- calculate_cap(data_res, shumway_lasso, default_3Y) %>% mutate(Model = "shumway_lasso")
+
+cap_results <- bind_rows(cap_winso, cap_winso_3Y, cap_industry, cap_shumway, cap_shumway_lasso)
+
+# --- 4. CONSTRUCTION DU GRAPHIQUE ---
+prop_defaults <- sum(data_test$default_1Y) / nrow(data_test)
+
+ggplot(cap_results, aes(x = x_axis, y = y_axis, color = Model)) +
+  
+  # --- Courbes des Modèles ---
+  geom_line(linewidth = 1.2) +
+
+  # --- Références (Sans couleur/legend) ---
+  # Courbe Aléatoire
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "grey50") +
+
+  # Courbe du Modèle Parfait (tracée avec une autre couche de données/géométrie)
+  geom_segment(
+    aes(x = 0, y = 0, xend = prop_defaults, yend = 1),
+    color = "darkred", linetype = "dotted", inherit.aes = FALSE
+  ) +
+  geom_segment(
+    aes(x = prop_defaults, y = 1, xend = 1, yend = 1),
+    color = "darkred", linetype = "dotted", inherit.aes = FALSE
+  ) +
+  
+  # --- Mise en forme ---
+  scale_x_continuous(labels = percent, name = "% d'entreprises sélectionnées (du risque le plus élevé)") +
+  scale_y_continuous(labels = percent, name = "% de défauts capturés cumulativement") +
+  labs(
+    title = "Comparaison des Courbes CAP des Modèles",
+    subtitle = "Évaluation de la discrimination sur l'échantillon de test"
+  ) +
+  theme_minimal() +
+  # Placer la légende en haut pour qu'elle soit claire
+  theme(legend.position = "top")
+```
+
+Iso ROC Curve ? J'ai loupé une étape ?
+
+Meilleure courbe = plus proche des pointillés rouge
+
+Meilleur = shumway ?
+
+# Calcul des ratios d'AUC
+
+```{r}
+auc
+```
+
+```{r}
+auc_perfect <- 1
+auc_random <- 0.5
+ratio_auc <- (auc - auc_random) / (auc_perfect - auc)
+ratio_auc
+```
