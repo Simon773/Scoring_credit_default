@@ -11,6 +11,8 @@ library(tidyverse)
 library(DescTools)
 library(glmnet)
 library(scales)
+library(caret)
+library(pROC)
 ```
 
 ```{r}
@@ -30,8 +32,6 @@ data %>% select(default_1Y, default_3Y, default_5Y, WCTA, RETA, EBTA, TLTA, SLTA
 data_altman <- data %>% drop_na(WCTA, RETA, EBTA, TLTA, SLTA) #ça ne devrait supprimer aucune ligne puisque mean_imputation dans le code d'avant
 data_altman %>% select(default_1Y, WCTA, RETA, EBTA, TLTA, SLTA) %>% summary()
 ```
-
-Revoir le traitement des variables manquantes
 
 ```{r}
 altman_model <- glm(default_1Y ~ WCTA + RETA + EBTA + TLTA + SLTA, family="binomial", data = data_altman)
@@ -114,7 +114,7 @@ altman_model_weights_prop <- glm(default_1Y ~ WCTA_win + RETA_win + EBTA_win + T
 summary(altman_model_weights_prop)
 ```
 
-Tout est significatif mais moins bon que sans winzorization (la winsorization est bonne si on garde toutes les industries mais on en a enlevé certaines)
+Tout est significatif mais moins bon que sans winzorization
 
 Avec default_3Y
 
@@ -152,14 +152,14 @@ altman_model_weights_prop_5Y <- glm(default_5Y ~ WCTA_win + RETA_win + EBTA_win 
 summary(altman_model_weights_prop_5Y)
 ```
 
-Variables toutes significatives mais moins bon AIC
+Variables toutes significatives mais moins bon AIC (très léger)
 
 =\> On garde default_3Y avec les variables winsorisés.
 
 # Zmijewski's ratios (1984)
 
 ::: warning
-**Attention !** Cette partie ne fonctionne pas car les variables ne sont pas dans le dataset. (il faut retourner le code de Maëlys)
+**Attention !** Cette partie ne fonctionne pas car les variables ne sont pas dans le dataset. (il faudrait retourner le code de Maëlys...)
 :::
 
 (NI/TA, TL/TA, CA/CL)
@@ -202,7 +202,7 @@ Toutes les variables sont significatives à 5%.
 
 # Test avec tous les ratios
 
-A faire ?
+A faire ? Altman + Zmijewski (pas forcément pertinent je pense)
 
 # Others variables
 
@@ -235,10 +235,17 @@ summary(altman_model_shumway)
 
 Tout est significatif et meilleur AIC
 
+```{r}
+altman_model_shumway_win <- glm(default_3Y ~ WCTA_win + RETA_win + EBTA_win + TLTA_win + SLTA_win + industry + SIGMA_win + PAST_RET_win + RELATIVE_SIZE_win, family="binomial", weights = weights_prop_3Y, data = data_altman_win)
+summary(altman_model_shumway_win)
+```
+
+Meilleur AIC en prenant les winso des variables de shumway également
+
 On tente un LASSO pour voir
 
 ```{r}
-formula_lasso <- default_3Y ~ WCTA_win + RETA_win + EBTA_win + TLTA_win + SLTA_win + industry + SIGMA + PAST_RET + RELATIVE_SIZE
+formula_lasso <- default_3Y ~ WCTA_win + RETA_win + EBTA_win + TLTA_win + SLTA_win + industry + SIGMA_win + PAST_RET_win + RELATIVE_SIZE_win
 data_LASSO <- model.matrix(formula_lasso, data = data_altman_win)[,-1] #pour enlever l'intercept
 ```
 
@@ -262,13 +269,42 @@ coeff_lasso <- coef(altman_model_shumway_lasso, s = lambda_best)
 coeff_lasso
 ```
 
-Seul SLTA n'est pas inclut dans le modèle (je crois que ça correspond à ce que disais les articles : pris tout seul il ne sert à rien, significatif avec les autres ratios mais inutile quand on rajoute shumway)
+SLTA n'est pas inclut dans le modèle (je crois que ça correspond à ce que disais les articles : pris tout seul il ne sert à rien, significatif avec les autres ratios mais inutile quand on rajoute shumway)
+
+Manufacturing non plus mais autres industries sont très significatives
+
+Relative_size_win également, on tente avec Relative_size
+
+```{r}
+formula_lasso <- default_3Y ~ WCTA_win + RETA_win + EBTA_win + TLTA_win + SLTA_win + industry + SIGMA_win + PAST_RET_win + RELATIVE_SIZE
+data_LASSO <- model.matrix(formula_lasso, data = data_altman_win)[,-1] #pour enlever l'intercept
+```
+
+```{r}
+altman_model_shumway_lasso <- cv.glmnet(
+    x = data_LASSO,
+    y = data_altman_win$default_3Y,
+    alpha = 1,
+    family = "binomial",
+    weights = data_altman_win$weights_prop_3Y
+)
+```
+
+```{r}
+lambda_best <- altman_model_shumway_lasso$lambda.1se
+coeff_lasso <- coef(altman_model_shumway_lasso, s = lambda_best)
+coeff_lasso
+```
+
+Même résultat
 
 # ROC Curve
 
 ### Préparation des données
 
 On va faire un train / test split (sans prendre en compte le temps) puis recalculer les modèles pour avoir les prédictions.
+
+En faisant, on considère des observations année-entreprises indépendantes (hypothèse très forte et même un peu fausse)
 
 ```{r}
 set.seed(42)
@@ -281,11 +317,13 @@ data_test <- data_altman_win[-indices, ]
 data_test_lasso <- model.matrix(formula_lasso, data = data_test)[,-1]
 ```
 
+On recalcule les modèles
+
 ```{r}
 altman_model_winsorized_1Y <- glm(default_1Y ~ WCTA_win + RETA_win + EBTA_win + TLTA_win + SLTA_win, family="binomial", weights = weights_prop, data = data_train)
 altman_model_winsorized_3Y <- glm(default_3Y ~ WCTA_win + RETA_win + EBTA_win + TLTA_win + SLTA_win, family="binomial", weights = weights_prop_3Y, data = data_train)
 altman_model_industry <- glm(default_3Y ~ WCTA_win + RETA_win + EBTA_win + TLTA_win + SLTA_win + industry, family="binomial", weights = weights_prop_3Y, data = data_train)
-altman_model_shumway <- glm(default_3Y ~ WCTA_win + RETA_win + EBTA_win + TLTA_win + SLTA_win + industry + SIGMA + PAST_RET + RELATIVE_SIZE, family="binomial", weights = weights_prop_3Y, data = data_train)
+altman_model_shumway <- glm(default_3Y ~ WCTA_win + RETA_win + EBTA_win + TLTA_win + SLTA_win + industry + SIGMA_win + PAST_RET_win + RELATIVE_SIZE_win, family="binomial", weights = weights_prop_3Y, data = data_train)
 ```
 
 ```{r}
@@ -330,7 +368,106 @@ auc <- cbind(auc_winso, auc_winso_3Y, auc_industry, auc_shumway, auc_shumway_las
 auc
 ```
 
-ROC Curve
+On fait un train / test en respectant le temps
+
+```{r}
+# --- 1. Préparation des 10 Folds aléatoires ---
+# On fixe une graine pour la reproductibilité
+set.seed(123)
+
+# On crée une colonne 'fold_id' qui assigne aléatoirement chaque ligne à un groupe (1 à 10)
+# createFolds de caret assure une bonne répartition, sinon sample() marche aussi
+folds_indices <- createFolds(data_altman_win$default_1Y, k = 10, list = FALSE)
+data_altman_win$fold_id <- folds_indices
+
+# Liste pour stocker les résultats
+resultats_cv <- list()
+
+# --- 2. Boucle sur les 10 Folds ---
+for (k in 1:10) {
+  
+  # A. Définition brute du Test et du Train
+  test_set_raw  <- data_altman_win %>% filter(fold_id == k)
+  train_set_raw <- data_altman_win %>% filter(fold_id != k)
+  
+# B. Application de la contrainte temporelle par entreprise
+  # "Pour une entreprise donnée, le train ne doit pas contenir de données 
+  # postérieures ou égales à la plus ancienne donnée de cette entreprise dans le test."
+  
+  # Étape 1 : Trouver l'année minimale dans le Test pour chaque entreprise
+  cutoff_dates <- test_set_raw %>%
+    group_by(gvkey) %>%  # Remplacez par votre variable d'identifiant (ex: gvkey, siren...)
+    summarise(min_test_year = min(fyear), .groups = 'drop')
+  
+  # Étape 2 : Filtrer le Train
+  train_set_clean <- train_set_raw %>%
+    left_join(cutoff_dates, by = "gvkey") %>%
+    filter(
+      # Cas 1 : L'entreprise n'est pas dans le test (min_test_year est NA) -> On garde tout
+      is.na(min_test_year) | 
+      # Cas 2 : L'entreprise est dans le test -> On ne garde que le passé strict
+      fyear < min_test_year
+    ) %>%
+    select(-min_test_year) # On nettoie la colonne temporaire
+  
+  # --- C. Entraînement et Prédiction ---
+  
+  altman_model_winsorized_1Y_2 <- glm(default_1Y ~ WCTA_win + RETA_win + EBTA_win + TLTA_win + SLTA_win,
+                                    family="binomial", weights = weights_prop, data = train_set_clean)
+  altman_model_winsorized_3Y_2 <- glm(default_3Y ~ WCTA_win + RETA_win + EBTA_win + TLTA_win + SLTA_win,
+                                    family="binomial", weights = weights_prop_3Y, data = train_set_clean)
+  altman_model_industry_2 <- glm(default_3Y ~ WCTA_win + RETA_win + EBTA_win + TLTA_win + SLTA_win +
+                                 industry, family="binomial", weights = weights_prop_3Y, data =
+                                train_set_clean)
+  altman_model_shumway_2 <- glm(default_3Y ~ WCTA_win + RETA_win + EBTA_win + TLTA_win + SLTA_win +
+                                industry + SIGMA + PAST_RET + RELATIVE_SIZE, family="binomial", weights =
+                                weights_prop_3Y, data = train_set_clean)
+  
+  # Prédiction
+  pred_prob_winso_2 <- predict(altman_model_winsorized_1Y_2, newdata = test_set_raw, type = "response")
+  pred_prob_winso_3Y_2 <- predict(altman_model_winsorized_3Y_2, newdata = test_set_raw, type = "response")
+  pred_prob_industry_2 <- predict(altman_model_industry_2, newdata = test_set_raw, type = "response")
+  pred_prob_shumway_2 <- predict(altman_model_shumway_2, newdata = test_set_raw, type = "response")
+  
+  # --- D. Stockage ---
+  fold_res <- test_set_raw %>%
+    select(gvkey, fyear, default_1Y, default_3Y) %>%
+    mutate(
+      fold = k,
+      pred_prob_winso_2 = pred_prob_winso_2,
+      pred_prob_winso_3Y_2 = pred_prob_winso_3Y_2,
+      pred_prob_industry_2 = pred_prob_industry_2, 
+      pred_prob_shumway_2 = pred_prob_shumway_2
+    )
+  
+  resultats_cv[[k]] <- fold_res
+  
+  # Petit print pour voir ce qui se passe
+  cat("Fold", k, ": Train size =", nrow(train_set_clean), "/ Test size =", nrow(test_set_raw), "\n")
+}
+
+# --- 3. Consolidation ---
+final_results <- bind_rows(resultats_cv)
+```
+
+```{r}
+final_results
+```
+
+```{r}
+roc_winso <- roc(final_results$default_1Y, final_results$pred_prob_winso_2)
+roc_winso_3Y <- roc(final_results$default_3Y, final_results$pred_prob_winso_3Y_2)
+roc_industry <- roc(final_results$default_3Y, final_results$pred_prob_industry_2)
+roc_shumway <- roc(final_results$default_3Y, final_results$pred_prob_shumway_2)
+
+
+auc_2 <- cbind(roc_winso$auc, roc_winso_3Y$auc, roc_industry$auc, roc_shumway$auc)
+auc_2
+```
+
+### ROC Curve
+
+Avec train/test sans le temps
 
 ```{r}
 plot(perf_winso, main="ROC curve Admissions", xlab="Specificity",
@@ -347,15 +484,59 @@ legend("bottomright",legend = c("default_1Y - Winsorized", "default_3Y - Winsori
 
 Default_1Y est pire que l'aléatoire. Pour les autres ça dépend du seuil
 
-# CAP Curve
+Avec le train / test qui prend en compte le temps
 
 ```{r}
-data_res <- data_test
-data_res$winso <- pred_prob_winso
-data_res$winso_3Y <- pred_prob_winso_3Y
-data_res$industry <- pred_prob_industry
-data_res$shumway <- pred_prob_shumway
-data_res$shumway_lasso <- pred_prob_shumway_lasso
+roc_list <- list(
+  "default_1Y - Winsorized" = roc_winso,
+  "default_3Y - Winsorized" = roc_winso_3Y,
+  "default_3Y Winso + industry" = roc_industry,
+  "default_3Y - Winso + ind + shumway" = roc_shumway
+)
+
+# 2. Générer le graphique avec ggroc
+ggroc(roc_list, legacy.axes = TRUE, size = 1) +
+  # Ajouter la ligne diagonale de référence (modèle aléatoire)
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "grey50") +
+  # Personnaliser les couleurs manuellement
+  scale_color_manual(values = c(
+    "default_1Y - Winsorized" = "darkorange",
+    "default_3Y - Winsorized" = "lightblue",
+    "default_3Y Winso + industry" = "coral",
+    "default_3Y - Winso + ind + shumway" = "lightgreen"
+  )) +
+  # Habillage du graphique
+  labs(
+    title = "ROC curve Admissions",
+    x = "1 - Specificity (False Positive Rate)",
+    y = "Sensitivity (True Positive Rate)",
+    color = "Models"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+Le meilleur modèle est celui avec Shumway.
+
+# CAP Curve
+
+Directement avec le temps
+
+```{r}
+#Sans prendre en compte le temps
+# data_res <- data_test
+# data_res$winso <- pred_prob_winso
+# data_res$winso_3Y <- pred_prob_winso_3Y
+# data_res$industry <- pred_prob_industry
+# data_res$shumway <- pred_prob_shumway
+# data_res$shumway_lasso <- pred_prob_shumway_lasso
+
+#En prenant en compte le temps (juste k = 10)
+data_res <- test_set_raw
+data_res$winso <- pred_prob_winso_2
+data_res$winso_3Y <- pred_prob_winso_3Y_2
+data_res$industry <- pred_prob_industry_2
+data_res$shumway <- pred_prob_shumway_2
 ```
 
 Code par Gemini
@@ -415,9 +596,9 @@ cap_winso <- calculate_cap(
 cap_winso_3Y <- calculate_cap(data_res, winso_3Y, default_3Y) %>% mutate(Model = "winso_3Y")
 cap_industry <- calculate_cap(data_res, industry, default_3Y) %>% mutate(Model = "industry")
 cap_shumway <- calculate_cap(data_res, shumway, default_3Y) %>% mutate(Model = "shumway")
-cap_shumway_lasso <- calculate_cap(data_res, shumway_lasso, default_3Y) %>% mutate(Model = "shumway_lasso")
+#cap_shumway_lasso <- calculate_cap(data_res, shumway_lasso, default_3Y) %>% mutate(Model = "shumway_lasso")
 
-cap_results <- bind_rows(cap_winso, cap_winso_3Y, cap_industry, cap_shumway, cap_shumway_lasso)
+cap_results <- bind_rows(cap_winso, cap_winso_3Y, cap_industry, cap_shumway)#, cap_shumway_lasso)
 
 # --- 4. CONSTRUCTION DU GRAPHIQUE ---
 prop_defaults <- sum(data_test$default_1Y) / nrow(data_test)
@@ -457,7 +638,7 @@ Iso ROC Curve ? J'ai loupé une étape ?
 
 Meilleure courbe = plus proche des pointillés rouge
 
-Meilleur = shumway ?
+Meilleur = shumway ? Shumway et industry iso pour risque élevé
 
 # Calcul des ratios d'AUC
 
@@ -470,4 +651,61 @@ auc_perfect <- 1
 auc_random <- 0.5
 ratio_auc <- (auc - auc_random) / (auc_perfect - auc)
 ratio_auc
+```
+
+```{r}
+auc_2
+```
+
+```{r}
+ratio_auc_2 <- (auc_2 - auc_random) / (auc_perfect - auc_2)
+ratio_auc_2
+```
+
+# Score
+
+```{r}
+score_shumway <- final_results %>% select(default_1Y, pred_prob_shumway_2) %>% arrange(pred_prob_shumway_2)
+
+ggplot(score_shumway, aes(x = pred_prob_shumway_2, color = factor(default_1Y), fill = factor(default_1Y))) +
+  geom_density(alpha = 0.4) +
+  labs(x = "Values",
+       y = "Density",
+       color = "Defaults",
+       fill = "Defaults") +
+  theme_minimal()
+```
+
+```{r}
+score_shumway <- final_results %>% select(default_3Y, pred_prob_shumway_2) %>% arrange(pred_prob_shumway_2)
+
+ggplot(score_shumway, aes(x = pred_prob_shumway_2, color = factor(default_3Y), fill = factor(default_3Y))) +
+  geom_density(alpha = 0.4) +
+  labs(x = "Values",
+       y = "Density",
+       color = "Defaults",
+       fill = "Defaults") +
+  theme_minimal()
+```
+
+On crée une dummies : si l'entreprise fait défaut maintenant ou dans les trois années à venir = 1 (0 sinon). Je suis vraiment pas sûre de ce code, est-ce que c'est pas déjà default_3Y ?
+
+```{r}
+final_results_2 <- final_results %>%
+  # On groupe par entreprise pour ne pas mélanger les données entre elles
+  group_by(gvkey) %>% 
+  # On s'assure que les années sont bien triées
+  arrange(fyear) %>% 
+  mutate(
+    default_3Y_horizon = ifelse(
+      default_3Y == 1 | 
+      lead(default_3Y, 1) == 1 | 
+      lead(default_3Y, 2) == 1 | 
+      lead(default_3Y, 3) == 1, 
+      1, 0
+    )
+  ) %>%
+  # On remplace les NA par 0 (le lead renvoie NA s'il n'y a pas d'année future)
+  mutate(default_3Y_horizon = tidyr::replace_na(default_3Y_horizon, 0)) %>%
+  ungroup()
 ```
