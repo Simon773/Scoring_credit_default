@@ -4,6 +4,8 @@ format: html
 editor: visual
 ---
 
+# OBSOLETE - EDA dans Data Cleaning
+
 # Import of the libraries and data
 
 ```{r}
