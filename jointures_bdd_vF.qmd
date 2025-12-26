@@ -1,0 +1,375 @@
+---
+title: "jointures_bdd_vF"
+format: html
+---
+
+```{r, message=FALSE, warning=FALSE}
+rm(list=ls())
+setwd("~/Maëlys One drive/TSE/M2/Scoring/Project")
+
+library(tidyverse)
+library(lubridate)
+library(readxl)
+library(data.table)
+
+```
+
+# Data Wrangling and Database Construction
+
+Our goal in this section is to build a comprehensive database to predict the probability of corporate default. To achieve this, we aggregate and harmonize data from several distinct sources.
+
+#### Accounting and Bankruptcy Data (Compustat and LoPucki)
+
+We primarily source annual financial statement data from **Compustat**. We have accounting information per fiscal year. We get one observation per fiscal year for each company.
+
+Compustat also contains information about defaults. This information comes from the deletion of the compustat database and most importantly the reason for this deletion. We mark deletions for *Bankruptcy* and *Liquidation* as defaults and the deletion date as the default date.
+
+To identify more failure events, we augment the Compustat data with the **UCLA-LoPucki Bankruptcy Research Database (BRD)**.
+
+While Compustat contains some default information, LoPucki is considered more accurate regarding precise filing dates. Therefore, we merge the two sources: if a default is recorded in both but the dates differ, we prioritize the date provided by LoPucki. Based on these dates, we define binary target variables for different horizons: default within **1 year, 3 years, and 5 years**.
+
+#### Addressing the "Look-Ahead Bias" (The Shumway Correction)
+
+A critical challenge in bankruptcy prediction is the "publication lag." Financial statements for a fiscal year ending on December 31st are generally not published until months later. If we used a default occurring in January to label the previous year's financial data as a "default," we would be assuming investors had access to data that wasn't public yet.
+
+To avoid this look-ahead bias, we follow the methodology of **Shumway (2001)** [@Shumway2001]. We assume a safe publication lag of **6 months** after the fiscal year-end.
+
+Example: Consider a company with a fiscal year ending on **December 31, 2020**.
+
+-   If the company defaults on **January 28, 2021**, this date falls within the publication lag. At that moment, the 2020 accounts were not yet public; the market was operating on 2019 data. Therefore, the $default\_1Y$ variable is set to **1 for the year 2019** (and 0 for 2020, as the 2020 data effectively "arrived" after the default).
+-   Conversely, if the default occurs in **July 2021** (after the 6-month lag), the 2020 data is considered public. In this case, $default\_1Y$ is set to **1 for the year 2020** (and 0 for 2019).
+
+#### Integrating Market Data (CRSP)
+
+We incorporate stock market data from **CRSP** (Center for Research in Security Prices). Since CRSP data is daily, we aggregate it to match our annual frequency. Consistent with our lag assumption, we extract market variables (such as stock price and shares outstanding) as of the date **6 months after the fiscal year-end**. This ensures that the market data corresponds to the time when financial statements are assumed to be public.
+
+#### Handling Delisting and Data Gaps
+
+Companies often stop trading or are delisted from the exchange some time before officially filing for bankruptcy. In cases where market data disappears before the legal bankruptcy date, we use the last available information, provided it is not "stale." We set a limit of **3 years**: if the last available market/accounting data is more than 3 years old relative to the default date, it is considered irrelevant for prediction and excluded.
+
+#### Construction of Financial Ratios
+
+Finally, we compute the standard predictors used in the literature, specifically those required for **Altman’s Z-Score** [@Altman1968] and **Shumway’s model** [@Shumway2001]. The integration of CRSP is particularly important here: it allows us to calculate the **Market Value of Equity**, which replaces the Book Value of Equity in Altman's $X_4$ ratio ($\frac{\text{Market Value of Equity}}{\text{Total Liabilities}}$), providing a more market-reactive measure of leverage.
+
+#### Structure of the database
+
+| Variable | Description |
+|:-----------------------------------|:-----------------------------------|
+| **1. Identifiers & Dates** |  |
+| `gvkey` | Unique Company Identifier (Source: Compustat) |
+| `permno` | Unique Stock Identifier (Source: CRSP) |
+| `conm` | Company Name |
+| `industry` | Industry of the Company |
+| `fyear` | Fiscal Year (e.g., 2000) |
+| `prediction_start_date` | Prediction Date (Fiscal Year End + 6-month lag) |
+| **2. Target Variables (Y)** |  |
+| `default_1Y` | 1 if default occurs within 12 months after prediction date |
+| `default_3Y` | 1 if default occurs within 36 months after prediction date |
+| `default_5Y` | 1 if default occurs within 60 months after prediction date |
+| `final_default_date` | Exact date of the first recorded default |
+| **3. Shumway Model Variables (X - Market)** |  |
+| `SIGMA` | Annualized volatility of stock returns (Risk) |
+| `PAST_RET` | Cumulative stock return over the past year |
+| `RELATIVE_SIZE` | $\log(\text{Company Market Cap} / \text{Total Market Cap})$ |
+| `market_equity` | Gross Market Capitalization (Price $\times$ Shares Outstanding) |
+| **4. Altman 1968 Model Variables (X - Ratios)** |  |
+| `WCTA` (X1) | Working Capital / Total Assets (Liquidity) |
+| `RETA` (X2) | Retained Earnings / Total Assets (Cumulative Profitability) |
+| `EBTA` (X3) | EBIT / Total Assets (Operating Margin) |
+| `METL` (X4) | Market Equity / Total Liabilities (Real Leverage) |
+| `SLTA` (X5) | Sales / Total Assets (Asset Turnover) |
+| **5. Raw Variables** |  |
+| `at` | Total Assets |
+| `lt` | Total Liabilities |
+| `ni` | Net Income |
+| `gap_days` | Age of market data (in days) |
+
+: Variable Dictionary {#tbl-variable_dict}
+
+### Code to get this database
+#### Data from compustat
+
+```{r}
+compustat_all <- readRDS("compustat_all.rds")
+# Building altman ratios
+compustat_all_modif <- compustat_all %>%
+  select(gvkey, fyear,fyr, conm, at, wcap, re, ebit, lt, sale, lct, act) %>%
+  mutate( wcap2 = act - lct) %>%
+  mutate(WCTA = wcap / at,
+         WCTA2 = wcap2 / at, 
+         RETA = re / at,
+         EBTA = ebit / at,
+         TLTA = lt / at, # as a proxy for ME/TL
+         SLTA = sale / at)
+```
+
+#### Defaults Company
+
+```{r}
+company_all <- readRDS("company_all.rds")
+
+#Companies that defaulted
+company_all_sel <- company_all %>% 
+  filter(dlrsn %in% c("02", "03")) %>%
+  select(c("gvkey","conm", "dldte", "dlrsn"))
+
+#Getting the industry for each company
+company_all_sic <- company_all %>% select(c("gvkey", "conm", "sic"))
+
+```
+
+```{r}
+test_join_cc <- compustat_all_modif %>% left_join(company_all_sel, by=c("gvkey", "conm")) %>%
+  left_join(company_all_sic, by=c("gvkey", "conm")) %>%
+  mutate(sic = as.integer(sic)) %>%
+  mutate(industry = case_when(
+      sic >= 1 & sic <= 999   ~ "Agriculture",
+      sic >= 1000 & sic <= 1499 ~ "Mining",
+      sic >= 1500 & sic <= 1799 ~ "Construction",
+      sic >= 2000 & sic <= 3999 ~ "Manufacturing",
+      sic >= 4000 & sic <= 4899 ~ "Transportation",
+      sic >= 4900 & sic <= 4999 ~ "Utilities",
+      sic >= 5000 & sic <= 5199 ~ "Wholesale",
+      sic >= 5200 & sic <= 5999 ~ "Retail",
+      sic >= 6000 & sic <= 6799 ~ "Finance",
+      sic >= 7000 & sic <= 8999 ~ "Services",
+      sic >= 9000 & sic <= 9999 ~ "Public",
+      TRUE ~ "Missing"
+    ))
+
+keep_indus <- c("Agricultre", "Mining","Construction", "Manufacturing", "Transportation", "Utilities","Wholesale", "Retail", "Services")
+```
+
+```{r}
+test_join_cc %>%
+  group_by(dlrsn) %>%
+  summarize(n_distinct(conm))
+```
+
+```{r}
+test_join_cc %>%
+  filter(industry %in% keep_indus) %>%
+  group_by(dlrsn) %>%
+  summarize(n_distinct(conm))
+```
+
+We have 3000 recorded defaults, and 1445 if we remove public and financial companies
+
+#### Defaults from Lopucki
+
+```{r, message = FALSE, warning=FALSE}
+LoPucki <- read_excel("LoPucki.xlsx")
+LoPucki_clean<-LoPucki%>%
+  select(NameCorp,Chapter,GvkeyBefore,DateFiled, DateEmerging)%>%
+  filter(Chapter %in% c('7', '11')) %>%
+  group_by(GvkeyBefore) %>%
+  summarize(DateFiled = min(DateFiled),
+            NameCorp = NameCorp[which.min(DateFiled)],
+            Chapter = Chapter[which.min(DateFiled)]) %>%
+  mutate(DateFiled = lubridate::as_date(DateFiled)) %>%
+  ungroup()
+test_join_ccl <- test_join_cc %>% left_join(LoPucki_clean, by=c("gvkey"="GvkeyBefore"))
+```
+
+
+#### Adding the default variable in the data base
+
+We take the first default date between LoPucki and compustat. We look if the companies defaulted in the next 1, 3 and 5 years. To take into account the look-ahead bias, we consider a 6 months lag after the end of the fiscal year
+
+```{r}
+test_join_ccl_wd <- test_join_ccl %>%
+  mutate(
+    DateFiled = as.Date(DateFiled),
+    dldte     = as.Date(dldte),
+    raw_default_date = pmin(DateFiled, dldte, na.rm = TRUE) 
+  ) %>%
+
+  # if a company defaulted multiple times, we only consider the first default
+  group_by(gvkey) %>%
+  mutate(
+    final_default_date = if(all(is.na(raw_default_date))) {
+      as.Date(NA) 
+    } else {
+      min(raw_default_date, na.rm = TRUE)
+    }
+  ) %>%
+  ungroup() %>%
+
+  # 3. Calcul des dates clés pour le modèle
+  mutate(
+    end_fy = make_date(fyear, fyr, 1) %m+% months(1) %m-% days(1),
+    # we take the last day of the month
+    prediction_start_date = end_fy %m+% months(6),
+
+    # Prediction windows
+    end_window_1Y = prediction_start_date %m+% years(1),
+    end_window_3Y = prediction_start_date %m+% years(3),
+    end_window_5Y = prediction_start_date %m+% years(5)
+  ) %>%
+
+  # we remove the information for companies after its default
+  # example if a company defaulted in 2020, we don't keep its corresponding lines
+  # after 2021
+  filter(is.na(final_default_date) | prediction_start_date < final_default_date) %>%
+
+  # Creation of the default variables
+  mutate(
+    default_1Y = ifelse(!is.na(final_default_date) & 
+                        final_default_date > prediction_start_date & 
+                        final_default_date <= end_window_1Y, 1, 0),
+
+    default_3Y = ifelse(!is.na(final_default_date) & 
+                        final_default_date > prediction_start_date & 
+                        final_default_date <= end_window_3Y, 1, 0),
+
+    default_5Y = ifelse(!is.na(final_default_date) & 
+                        final_default_date > prediction_start_date & 
+                        final_default_date <= end_window_5Y, 1, 0)
+  )
+```
+
+```{r}
+test_join_ccl_wd %>%
+  filter(industry %in% keep_indus) %>%
+  summarise(
+    n_gvkey_1Y = n_distinct(gvkey[default_1Y == 1]),
+    n_gvkey_3Y = n_distinct(gvkey[default_3Y == 1]),
+    n_gvkey_5Y = n_distinct(gvkey[default_5Y == 1])
+  )
+```
+
+#### Adding market information with CRSP
+
+We aggregate the CRSP daily data at the prediction date (moment when the comustat data were available to the public). 
+
+This part is really computationnaly costly and is thus commented.
+
+```{r}
+# ccmxpf_linktable<-readRDS("ccmxpf_linktable.rds")
+# crsp_daily<-readRDS("crsp_daily.rds")
+```
+
+```{r}
+#Associating compustat gvkey and crsp permno
+# gc()
+# 
+# link_table_clean <- ccmxpf_linktable %>%
+#   select(gvkey, permno, linkdt, linkenddt) %>%
+#   mutate(linkenddt = replace_na(linkenddt, today()))
+# 
+# skeleton_sticky <- test_join_ccl_wd %>%
+#   inner_join(link_table_clean, by = "gvkey", relationship = "many-to-many") %>%
+#   filter(linkdt <= prediction_start_date) %>%
+#   arrange(gvkey, fyear, desc(linkenddt)) %>%
+#   group_by(gvkey, fyear) %>%
+#   slice(1) %>%
+#   ungroup() %>%
+#   select(gvkey, fyear, prediction_start_date, permno, linkenddt)
+```
+
+```{r}
+# rm(list = setdiff(ls(), c("test_join_ccl_wd", "skeleton_sticky", "crsp_daily")))
+# gc()
+# 
+# dt_crsp <- as.data.table(crsp_daily)[, .(permno, date, ret, prc, shrout)]
+# dt_skeleton <- as.data.table(skeleton_sticky)
+# 
+# setkey(dt_crsp, permno, date)
+# 
+# dt_skeleton[, `:=`(
+#   window_end = prediction_start_date,
+#   window_start = prediction_start_date %m-% years(3)
+# )]
+# 
+# dt_joined <- dt_crsp[dt_skeleton, 
+#                      on = .(permno, date >= window_start, date <= window_end), 
+#                      nomatch = NULL]
+# 
+# final_features_dt <- dt_joined[, .(
+#   sigma_E = sd(tail(ret[order(date)], 252), na.rm = TRUE) * sqrt(252),
+#   
+#   past_ret = exp(sum(log(1 + tail(ret[order(date)], 252)), na.rm = TRUE)) - 1,
+# 
+#   market_equity = (last(abs(prc)[order(date)]) * last(shrout)[order(date)]),
+#   
+#   last_trade_date = max(date)
+#   
+# ), by = .(gvkey, fyear, prediction_start_date)] 
+# 
+# 
+# final_features_dt[, gap_days := as.numeric(prediction_start_date - last_trade_date)]
+# 
+# bad_stats <- final_features_dt[gap_days > 365, .(
+#   med_sigma = median(sigma_E, na.rm = TRUE),
+#   med_ret = median(past_ret, na.rm = TRUE)
+# )]
+# 
+# safe_sigma <- if(is.na(bad_stats$med_sigma)) 0.8 else bad_stats$med_sigma
+# safe_ret <- if(is.na(bad_stats$med_ret)) -0.5 else bad_stats$med_ret
+# 
+# final_features_dt[is.na(sigma_E), sigma_E := safe_sigma]
+# final_features_dt[is.na(past_ret), past_ret := safe_ret]
+# final_features_dt[is.na(market_equity), market_equity := 0.01]
+# 
+# final_features_dt[, `:=`(gap_days = NULL, last_trade_date = NULL)]
+# 
+# dt_main <- as.data.table(test_join_ccl_wd)
+# 
+# gc()
+# if (!is.data.table(dt_main)) setDT(dt_main)
+# 
+# dt_main[final_features_dt, 
+#         `:=` (
+#           sigma_E = i.sigma_E,
+#           past_ret = i.past_ret,
+#           market_equity = i.market_equity
+#         ), 
+#         on = c("gvkey", "fyear", "prediction_start_date")]
+# 
+# saveRDS(dt_main, "dataset_final_complet.rds")
+```
+
+```{r}
+# total_market_cap_by_year <- dt_main %>%
+#   group_by(fyear) %>%  # Pour chaque année (ex: 1990, 1991...)
+#   summarise(
+#     # On additionne la Market Cap de TOUTES les entreprises de cette année-là
+#     total_market_val = sum(market_equity, na.rm = TRUE), 
+#     .groups = "drop"
+#   )
+```
+
+```{r}
+# final_shumway_data <- dt_main %>%
+#   left_join(total_market_cap_by_year, by = "fyear") %>%
+#   mutate(
+#     ME_millions = market_equity / 1000,
+#     
+#     WCTA = ifelse(!is.na(wcap), wcap / at, (act - lct) / at),
+#     
+#     # X2 : Retained Earnings / Total Assets (RETA)
+#     RETA = re / at,
+#     
+#     # X3 : EBIT / Total Assets (EBTA)
+#     EBTA = ebit / at,
+#     
+#     # X5 : Sales / Total Assets (SLTA)
+#     SLTA = sale / at,
+#     
+#     # X4 : Market Value Equity / Total Liabilities
+#     METL = ME_millions / lt, 
+#     
+#     RELATIVE_SIZE = log(market_equity / total_market_val),
+#     SIGMA = sigma_E,       # Volatility
+#     PAST_RET = past_ret    # Past returns
+#   ) %>%
+#   
+#   mutate(across(c(WCTA, RETA, EBTA, SLTA, METL), ~ ifelse(is.infinite(.), NA, .)))
+# 
+# saveRDS(final_shumway_data, "final_shumway_data.rds")
+```
+
+
+```{r}
+data<-readRDS("final_shumway_data.rds")
+```
