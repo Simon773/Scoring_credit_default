@@ -1,0 +1,1210 @@
+---
+title: "Scoring - Default prediction"
+author: "Maëlys Rapenne, Loan Rottier, Simon Simus, Nathan Vidal"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+# Scoring - Default prediction
+
+In 2024, approximately 150 companies defaulted according to the S&P agency. Predicting these defaults before they occur is of critical importance for a wide range of stakeholders, including investors, banks, and public institutions, who seek to mitigate financial risk and ensure economic stability. Consequently, numerous organizations and researchers have dedicated significant effort to identifying the most effective financial ratios for forecasting corporate failure.
+
+This work aims to evaluate the performance of Altman's ratio within this context. It begins with a literature review focusing on the Altman Z-score and other relevant variables that help explain the mechanisms of default. We then apply a logistic regression model to the variables identified in the literature to test their predictive power. Finally, we explore alternative performance metrics beyond simple accuracy. Since corporate defaults are considered "rare events," standard accuracy can be misleading; therefore, we test more robust metrics designed to handle imbalanced data and provide a more precise evaluation of the model.
+
+```{r, message=FALSE, warning=FALSE}
+rm(list=ls())
+
+library(tidyverse)
+library(lubridate)
+library(readxl)
+library(data.table)
+library(DescTools)
+library(glmnet)
+library(scales)
+library(caret)
+library(pROC)
+library(ggplot2)
+library(tinytex)
+```
+
+# Database preparation
+
+## Data Wrangling and Database Construction
+
+Our goal in this section is to build a comprehensive database to predict the probability of corporate default. To achieve this, we aggregate and harmonize data from several distinct sources.
+
+#### Accounting and Bankruptcy Data (Compustat and LoPucki)
+
+We primarily source annual financial statement data from **Compustat**. We have accounting information per fiscal year. We get one observation per fiscal year for each company.
+
+Compustat also contains information about defaults. This information comes from the deletion of the compustat database and most importantly the reason for this deletion. We mark deletions for *Bankruptcy* and *Liquidation* as defaults and the deletion date as the default date.
+
+To identify more failure events, we augment the Compustat data with the **UCLA-LoPucki Bankruptcy Research Database (BRD)**.
+
+While Compustat contains some default information, LoPucki is considered more accurate regarding precise filing dates. Therefore, we merge the two sources: if a default is recorded in both but the dates differ, we prioritize the date provided by LoPucki. Based on these dates, we define binary target variables for different horizons: default within **1 year, 3 years, and 5 years**.
+
+#### Addressing the "Look-Ahead Bias" (The Shumway Correction)
+
+A critical challenge in bankruptcy prediction is the "publication lag." Financial statements for a fiscal year ending on December 31st are generally not published until months later. If we used a default occurring in January to label the previous year's financial data as a "default," we would be assuming investors had access to data that wasn't public yet.
+
+To avoid this look-ahead bias, we follow the methodology of **Shumway (2001)**. We assume a safe publication lag of **6 months** after the fiscal year-end.
+
+Example: Consider a company with a fiscal year ending on **December 31, 2020**.
+
+-   If the company defaults on **January 28, 2021**, this date falls within the publication lag. At that moment, the 2020 accounts were not yet public; the market was operating on 2019 data. Therefore, the $default\_1Y$ variable is set to **1 for the year 2019** (and 0 for 2020, as the 2020 data effectively "arrived" after the default).
+-   Conversely, if the default occurs in **July 2021** (after the 6-month lag), the 2020 data is considered public. In this case, $default\_1Y$ is set to **1 for the year 2020** (and 0 for 2019).
+
+#### Integrating Market Data (CRSP)
+
+We incorporate stock market data from **CRSP** (Center for Research in Security Prices). Since CRSP data is daily, we aggregate it to match our annual frequency. Consistent with our lag assumption, we extract market variables (such as stock price and shares outstanding) as of the date **6 months after the fiscal year-end**. This ensures that the market data corresponds to the time when financial statements are assumed to be public.
+
+#### Handling Delisting and Data Gaps
+
+Companies often stop trading or are delisted from the exchange some time before officially filing for bankruptcy. In cases where market data disappears before the legal bankruptcy date, we use the last available information, provided it is not "stale." We set a limit of **3 years**: if the last available market/accounting data is more than 3 years old relative to the default date, it is considered irrelevant for prediction and excluded.
+
+#### Construction of Financial Ratios
+
+Finally, we compute the standard predictors used in the literature, specifically those required for **Altman’s Z-Score** and **Shumway’s model**. The integration of CRSP is particularly important here: it allows us to calculate the **Market Value of Equity**, which replaces the Book Value of Equity in Altman's $X_4$ ratio ($\frac{\text{Market Value of Equity}}{\text{Total Liabilities}}$), providing a more market-reactive measure of leverage.
+
+#### Structure of the database
+
+| Variable | Description |
+|:---|:---|
+| **1. Identifiers & Dates** |  |
+| `gvkey` | Unique Company Identifier (Source: Compustat) |
+| `permno` | Unique Stock Identifier (Source: CRSP) |
+| `conm` | Company Name |
+| `industry` | Industry of the Company |
+| `fyear` | Fiscal Year (e.g., 2000) |
+| `prediction_start_date` | Prediction Date (Fiscal Year End + 6-month lag) |
+| **2. Target Variables (Y)** |  |
+| `default_1Y` | 1 if default occurs within 12 months after prediction date |
+| `default_3Y` | 1 if default occurs within 36 months after prediction date |
+| `default_5Y` | 1 if default occurs within 60 months after prediction date |
+| `final_default_date` | Exact date of the first recorded default |
+| **3. Shumway Model Variables (X - Market)** |  |
+| `SIGMA` | Annualized volatility of stock returns (Risk) |
+| `PAST_RET` | Cumulative stock return over the past year |
+| `RELATIVE_SIZE` | $\log(\text{Company Market Cap} / \text{Total Market Cap})$ |
+| `market_equity` | Gross Market Capitalization (Price $\times$ Shares Outstanding) |
+| **4. Altman 1968 Model Variables (X - Ratios)** |  |
+| `WCTA` (X1) | Working Capital / Total Assets (Liquidity) |
+| `RETA` (X2) | Retained Earnings / Total Assets (Cumulative Profitability) |
+| `EBTA` (X3) | EBIT / Total Assets (Operating Margin) |
+| `METL` (X4) | Market Equity / Total Liabilities (Real Leverage) |
+| `SLTA` (X5) | Sales / Total Assets (Asset Turnover) |
+| **5. Raw Variables** |  |
+| `at` | Total Assets |
+| `lt` | Total Liabilities |
+| `ni` | Net Income |
+| `gap_days` | Age of market data (in days) |
+
+: Variable Dictionary {#tbl-variable_dict}
+
+### Code to get this database
+
+#### Data from compustat
+
+```{r}
+compustat_all <- readRDS("data/compustat_all.rds")
+# Building altman ratios
+compustat_all_modif <- compustat_all %>%
+  select(gvkey, fyear,fyr, conm, at, wcap, re, ebit, lt, sale, lct, act) %>%
+  mutate( wcap2 = act - lct) %>%
+  mutate(WCTA = wcap / at,
+         WCTA2 = wcap2 / at, 
+         RETA = re / at,
+         EBTA = ebit / at,
+         TLTA = lt / at, # as a proxy for ME/TL
+         SLTA = sale / at)
+```
+
+#### Defaults Company
+
+```{r}
+company_all <- readRDS("data/company_all.rds")
+
+#Companies that defaulted
+company_all_sel <- company_all %>% 
+  filter(dlrsn %in% c("02", "03")) %>%
+  select(c("gvkey","conm", "dldte", "dlrsn"))
+
+#Getting the industry for each company
+company_all_sic <- company_all %>% select(c("gvkey", "conm", "sic"))
+
+```
+
+```{r}
+test_join_cc <- compustat_all_modif %>% left_join(company_all_sel, by=c("gvkey", "conm")) %>%
+  left_join(company_all_sic, by=c("gvkey", "conm")) %>%
+  mutate(sic = as.integer(sic)) %>%
+  mutate(industry = case_when(
+      sic >= 1 & sic <= 999   ~ "Agriculture",
+      sic >= 1000 & sic <= 1499 ~ "Mining",
+      sic >= 1500 & sic <= 1799 ~ "Construction",
+      sic >= 2000 & sic <= 3999 ~ "Manufacturing",
+      sic >= 4000 & sic <= 4899 ~ "Transportation",
+      sic >= 4900 & sic <= 4999 ~ "Utilities",
+      sic >= 5000 & sic <= 5199 ~ "Wholesale",
+      sic >= 5200 & sic <= 5999 ~ "Retail",
+      sic >= 6000 & sic <= 6799 ~ "Finance",
+      sic >= 7000 & sic <= 8999 ~ "Services",
+      sic >= 9000 & sic <= 9999 ~ "Public",
+      TRUE ~ "Missing"
+    ))
+
+keep_indus <- c("Agricultre", "Mining","Construction", "Manufacturing", "Transportation", "Utilities","Wholesale", "Retail", "Services")
+```
+
+```{r}
+test_join_cc %>%
+  group_by(dlrsn) %>%
+  summarize(n_distinct(conm))
+```
+
+```{r}
+test_join_cc %>%
+  filter(industry %in% keep_indus) %>%
+  group_by(dlrsn) %>%
+  summarize(n_distinct(conm))
+```
+
+We have 3000 recorded defaults, and 1445 if we remove public and financial companies
+
+#### Defaults from Lopucki
+
+```{r, message = FALSE, warning=FALSE}
+LoPucki <- read_excel("data/LoPucki.xlsx")
+LoPucki_clean<-LoPucki%>%
+  select(NameCorp,Chapter,GvkeyBefore,DateFiled, DateEmerging)%>%
+  filter(Chapter %in% c('7', '11')) %>%
+  group_by(GvkeyBefore) %>%
+  summarize(DateFiled = min(DateFiled),
+            NameCorp = NameCorp[which.min(DateFiled)],
+            Chapter = Chapter[which.min(DateFiled)]) %>%
+  mutate(DateFiled = lubridate::as_date(DateFiled)) %>%
+  ungroup()
+test_join_ccl <- test_join_cc %>% left_join(LoPucki_clean, by=c("gvkey"="GvkeyBefore"))
+```
+
+#### Adding the default variable in the data base
+
+We take the first default date between LoPucki and compustat. We look if the companies defaulted in the next 1, 3 and 5 years. To take into account the look-ahead bias, we consider a 6 months lag after the end of the fiscal year
+
+```{r}
+test_join_ccl_wd <- test_join_ccl %>%
+  mutate(
+    DateFiled = as.Date(DateFiled),
+    dldte     = as.Date(dldte),
+    raw_default_date = pmin(DateFiled, dldte, na.rm = TRUE) 
+  ) %>%
+
+  # if a company defaulted multiple times, we only consider the first default
+  group_by(gvkey) %>%
+  mutate(
+    final_default_date = if(all(is.na(raw_default_date))) {
+      as.Date(NA) 
+    } else {
+      min(raw_default_date, na.rm = TRUE)
+    }
+  ) %>%
+  ungroup() %>%
+
+  # 3. Calcul des dates clés pour le modèle
+  mutate(
+    end_fy = make_date(fyear, fyr, 1) %m+% months(1) %m-% days(1),
+    # we take the last day of the month
+    prediction_start_date = end_fy %m+% months(6),
+
+    # Prediction windows
+    end_window_1Y = prediction_start_date %m+% years(1),
+    end_window_3Y = prediction_start_date %m+% years(3),
+    end_window_5Y = prediction_start_date %m+% years(5)
+  ) %>%
+
+  # we remove the information for companies after its default
+  # example if a company defaulted in 2020, we don't keep its corresponding lines
+  # after 2021
+  filter(is.na(final_default_date) | prediction_start_date < final_default_date) %>%
+
+  # Creation of the default variables
+  mutate(
+    default_1Y = ifelse(!is.na(final_default_date) & 
+                        final_default_date > prediction_start_date & 
+                        final_default_date <= end_window_1Y, 1, 0),
+
+    default_3Y = ifelse(!is.na(final_default_date) & 
+                        final_default_date > prediction_start_date & 
+                        final_default_date <= end_window_3Y, 1, 0),
+
+    default_5Y = ifelse(!is.na(final_default_date) & 
+                        final_default_date > prediction_start_date & 
+                        final_default_date <= end_window_5Y, 1, 0)
+  )
+```
+
+```{r}
+test_join_ccl_wd %>%
+  filter(industry %in% keep_indus) %>%
+  summarise(
+    n_gvkey_1Y = n_distinct(gvkey[default_1Y == 1]),
+    n_gvkey_3Y = n_distinct(gvkey[default_3Y == 1]),
+    n_gvkey_5Y = n_distinct(gvkey[default_5Y == 1])
+  )
+```
+
+#### Adding market information with CRSP
+
+We aggregate the CRSP daily data at the prediction date (moment when the comustat data were available to the public).
+
+This part is really computationnaly costly and is thus commented.
+
+```{r}
+# ccmxpf_linktable<-readRDS("ccmxpf_linktable.rds")
+# crsp_daily<-readRDS("crsp_daily.rds")
+```
+
+```{r}
+#Associating compustat gvkey and crsp permno
+# gc()
+# 
+# link_table_clean <- ccmxpf_linktable %>%
+#   select(gvkey, permno, linkdt, linkenddt) %>%
+#   mutate(linkenddt = replace_na(linkenddt, today()))
+# 
+# skeleton_sticky <- test_join_ccl_wd %>%
+#   inner_join(link_table_clean, by = "gvkey", relationship = "many-to-many") %>%
+#   filter(linkdt <= prediction_start_date) %>%
+#   arrange(gvkey, fyear, desc(linkenddt)) %>%
+#   group_by(gvkey, fyear) %>%
+#   slice(1) %>%
+#   ungroup() %>%
+#   select(gvkey, fyear, prediction_start_date, permno, linkenddt)
+```
+
+```{r}
+# rm(list = setdiff(ls(), c("test_join_ccl_wd", "skeleton_sticky", "crsp_daily")))
+# gc()
+# 
+# dt_crsp <- as.data.table(crsp_daily)[, .(permno, date, ret, prc, shrout)]
+# dt_skeleton <- as.data.table(skeleton_sticky)
+# 
+# setkey(dt_crsp, permno, date)
+# 
+# dt_skeleton[, `:=`(
+#   window_end = prediction_start_date,
+#   window_start = prediction_start_date %m-% years(3)
+# )]
+# 
+# dt_joined <- dt_crsp[dt_skeleton, 
+#                      on = .(permno, date >= window_start, date <= window_end), 
+#                      nomatch = NULL]
+# 
+# final_features_dt <- dt_joined[, .(
+#   sigma_E = sd(tail(ret[order(date)], 252), na.rm = TRUE) * sqrt(252),
+#   
+#   past_ret = exp(sum(log(1 + tail(ret[order(date)], 252)), na.rm = TRUE)) - 1,
+# 
+#   market_equity = (last(abs(prc)[order(date)]) * last(shrout)[order(date)]),
+#   
+#   last_trade_date = max(date)
+#   
+# ), by = .(gvkey, fyear, prediction_start_date)] 
+# 
+# 
+# final_features_dt[, gap_days := as.numeric(prediction_start_date - last_trade_date)]
+# 
+# bad_stats <- final_features_dt[gap_days > 365, .(
+#   med_sigma = median(sigma_E, na.rm = TRUE),
+#   med_ret = median(past_ret, na.rm = TRUE)
+# )]
+# 
+# safe_sigma <- if(is.na(bad_stats$med_sigma)) 0.8 else bad_stats$med_sigma
+# safe_ret <- if(is.na(bad_stats$med_ret)) -0.5 else bad_stats$med_ret
+# 
+# final_features_dt[is.na(sigma_E), sigma_E := safe_sigma]
+# final_features_dt[is.na(past_ret), past_ret := safe_ret]
+# final_features_dt[is.na(market_equity), market_equity := 0.01]
+# 
+# final_features_dt[, `:=`(gap_days = NULL, last_trade_date = NULL)]
+# 
+# dt_main <- as.data.table(test_join_ccl_wd)
+# 
+# gc()
+# if (!is.data.table(dt_main)) setDT(dt_main)
+# 
+# dt_main[final_features_dt, 
+#         `:=` (
+#           sigma_E = i.sigma_E,
+#           past_ret = i.past_ret,
+#           market_equity = i.market_equity
+#         ), 
+#         on = c("gvkey", "fyear", "prediction_start_date")]
+# 
+# saveRDS(dt_main, "dataset_final_complet.rds")
+```
+
+```{r}
+# total_market_cap_by_year <- dt_main %>%
+#   group_by(fyear) %>%  # Pour chaque année (ex: 1990, 1991...)
+#   summarise(
+#     # On additionne la Market Cap de TOUTES les entreprises de cette année-là
+#     total_market_val = sum(market_equity, na.rm = TRUE), 
+#     .groups = "drop"
+#   )
+```
+
+```{r}
+# final_shumway_data <- dt_main %>%
+#   left_join(total_market_cap_by_year, by = "fyear") %>%
+#   mutate(
+#     ME_millions = market_equity / 1000,
+#     
+#     WCTA = ifelse(!is.na(wcap), wcap / at, (act - lct) / at),
+#     
+#     # X2 : Retained Earnings / Total Assets (RETA)
+#     RETA = re / at,
+#     
+#     # X3 : EBIT / Total Assets (EBTA)
+#     EBTA = ebit / at,
+#     
+#     # X5 : Sales / Total Assets (SLTA)
+#     SLTA = sale / at,
+#     
+#     # X4 : Market Value Equity / Total Liabilities
+#     METL = ME_millions / lt, 
+#     
+#     RELATIVE_SIZE = log(market_equity / total_market_val),
+#     SIGMA = sigma_E,       # Volatility
+#     PAST_RET = past_ret    # Past returns
+#   ) %>%
+#   
+#   mutate(across(c(WCTA, RETA, EBTA, SLTA, METL), ~ ifelse(is.infinite(.), NA, .)))
+# 
+# saveRDS(final_shumway_data, "final_shumway_data.rds")
+```
+
+```{r}
+#data<-readRDS("final_shumway_data.rds")
+```
+
+# Literature review
+
+\paragraph{Foundations of Bankruptcy Prediction: Discriminant Analysis}
+
+The seminal work in corporate bankruptcy prediction is \textbf{Altman (1968)} \cite{Altman1968}, which moved the field beyond univariate ratio analysis to a multivariate approach. Altman utilized \textbf{Multiple Discriminant Analysis (MDA)} to distinguish between bankrupt and non-bankrupt manufacturing firms. By selecting five key ratios—Working Capital/Total Assets (TA), Retained Earnings/TA, EBIT/TA, Market Value of Equity/Book Value of Debt, and Sales/TA—he constructed the \textbf{Z-Score}.
+
+Altman established specific cut-off points for this score: firms with a $Z > 2.99$ were considered "safe," while those with $Z < 1.81$ were in the "distressed" zone, with a "zone of ignorance" in between.
+
+\textbf{Altman and al. (1974)} \cite{AltmanEtAl1974} extended this methodology internationally, applying it to the French cotton and wool industries. This study demonstrated the adaptability of the MDA framework. Facing a large set of 41 potential ratios, they employed \textbf{Principal Component Analysis (PCA)} to reduce dimensionality, eventually settling on a "ten-ratio model" that captured liquidity, profitability, and leverage, proving that the discriminant approach remained robust across different economic environments.
+
+\paragraph{Data Integrity and Articulation}
+
+Before applying these models, the integrity of the underlying data is paramount. \textbf{Ayash et al. (2023)}\cite{AyashBednarekBordeman2025} scrutinize the \texbf{Compustat} database, a standard source for such studies. They investigate "financial statement articulation"—the extent to which statements balance (e.g., does the change in cash on the balance sheet equal the cash flow statement?).
+
+Their findings suggest that while Compustat is reliable for "within-statement" balancing (Assets = Liabilities + Equity), it struggles with "between-statement" articulation due to missing values and data aggregation levels. This highlights the necessity of rigorous data cleaning (e.g., resolving nulls in line items vs. top-level accounts) to ensure the ratios fed into models like Altman’s are accurate.
+
+\paragraph{The Shift to Dynamic Models: Correcting Bias}
+
+A major critique of the static MDA approach is provided by \textbf{Shumway (2001)} \cite{Shumway2001}. He argues that traditional static models (like Altman's) are biased because they ignore the time-varying nature of firm data. A firm does not fail based solely on a single snapshot; its risk evolves.
+
+Shumway proposes a \textbf{discrete-time hazard model} (logit model on firm-year data) to correct this. His key contributions are:
+
+\begin{itemize}
+    \item \textbf{Eliminating Look-Ahead Bias}: He emphasizes the importance of accounting for "publication lag." To ensure predictors are available to investors at the time of prediction, one must assume a lag (e.g., 6 months) between the fiscal year-end and the availability of data.
+    \item \textbf{Market vs. Accounting Variables}: Shumway demonstrates that when time and selection biases are corrected, many accounting ratios lose significance. Instead, market-driven variables—specifically market size, past stock returns, and idiosyncratic return volatility —become the dominant predictors of default.
+\end{itemize}
+
+\textbf{Chava (2004)} \cite{ChavaJarrow2004} validates and extends Shumway’s hazard model approach. Using a larger dataset, Chava confirms that market variables subsume the predictive power of most accounting ratios. Furthermore, he introduces \textbf{Industry Effects}, showing that grouping firms into sectors (Finance, Manufacturing, etc.) significantly improves model fit, as baseline hazard rates differ across industries.
+
+# Data cleaning and exploration data analysis
+
+```{r}
+data <- readRDS("data/final_shumway_data.rds") 
+```
+
+```{r}
+data_ratio <- data %>% select(WCTA, WCTA2, RETA, EBTA, TLTA, SLTA, SIGMA, PAST_RET, RELATIVE_SIZE, market_equity)
+#, NITA, CACL) variable pour Zmijewski qui ne sont pas dans la bdd final_shumway_data
+```
+
+### Industry
+
+```{r}
+ggplot(data = data[default_1Y==1], aes(x = industry, color = factor(default_1Y), fill = factor(default_1Y)))+
+  geom_bar(position = "dodge") +
+  labs(title = "Number of defaults by industry",
+       x = "Industry",
+       y = "Number",
+       color = "Defaults",
+       fill = "Defaults") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  theme_minimal()
+```
+
+Some industries have more default companies than others. We will make the analysis on some industries, taking out Finance, Mining, Agriculture, and Public.
+
+```{r}
+rem_ind <- c("Agriculture", "Finance", "Mining", "Public")
+data_industry <- data %>% filter(! industry %in% rem_ind)
+nrow(data_industry) != nrow(data) #doit être TRUE
+nrow(data_industry)
+```
+
+```{r}
+data <- data_industry
+remove(data_industry)
+```
+
+## Imputation
+
+First, we impute by the mean all ratios. This method aims to replace the missing value with the mean, allowing us to retain those observations and utilize the non-missing values they contain.
+
+```{r}
+# Percentage of NA for default = 0
+na_pct_default0 <- sapply(data_ratio[data_ratio$default_1Y == 0, ], function(x) round(sum(is.na(x)) / length(x) * 100, 2))
+na_pct_default0
+
+# Percentage of NA for default = 1
+na_pct_default1 <- sapply(data_ratio[data_ratio$default_1Y == 1, ], function(x) round(sum(is.na(x)) / length(x) * 100, 2))
+na_pct_default1
+```
+
+The previous results show that we have more missing values among the defaulted company-years.
+
+Imputation with the mean
+
+```{r}
+colonnes_numeriques <- names(data)[sapply(data, is.numeric)]
+data[, (colonnes_numeriques) := lapply(.SD, function(x) {
+    x[is.infinite(x)] <- NA
+    return(x)
+}), .SDcols = colonnes_numeriques]
+
+for (var in names(data_ratio)) {
+  mean_val <- mean(data[[var]], na.rm = TRUE) 
+  data[[var]][is.na(data[[var]])] <- mean_val 
+}
+```
+
+## Winsorization
+
+Secondly, we winsorized each ratio because we have some extreme values that could give more weight to some observations and bias the results of our model.
+
+### WCTA
+
+```{r}
+ggplot(data, aes(x = WCTA, color = factor(default_1Y), fill = factor(default_1Y))) +
+  geom_density(alpha = 0.4) +
+  labs(title = "Densité des valeurs selon defaults",
+       x = "Valeurs",
+       y = "Densité",
+       color = "Defaults",
+       fill = "Defaults") +
+  theme_minimal()
+```
+
+```{r}
+data$WCTA_win <- Winsorize(data$WCTA, val= quantile(data$WCTA, probs = c(0.05, 0.99)))
+```
+
+```{r}
+ggplot(data, aes(x = WCTA_win, color = factor(default_1Y), fill = factor(default_1Y))) +
+  geom_density(alpha = 0.4) +
+  labs(title = "Densities of WCTA by default (default_1Y)",
+       x = "Values",
+       y = "Density",
+       color = "Defaults",
+       fill = "Defaults") +
+  theme_minimal()
+```
+
+We can see that both densities have the same mean, which can be explained by the imputation, but the non-default density has more observations on the right. We apply the same method on all variables.
+
+### EBTA
+
+```{r}
+ggplot(data, aes(x = EBTA, color = factor(default_1Y), fill = factor(default_1Y))) +
+  geom_density(alpha = 0.4) +
+  labs(title = "Densité des valeurs selon defaults",
+       x = "Valeurs",
+       y = "Densité",
+       color = "Defaults",
+       fill = "Defaults") +
+  theme_minimal()
+```
+
+```{r}
+data$EBTA_win <- Winsorize(data$EBTA, val= quantile(data$EBTA, probs = c(0.03, 0.99)))
+```
+
+```{r}
+ggplot(data, aes(x = EBTA_win, color = factor(default_1Y), fill = factor(default_1Y))) +
+  geom_density(alpha = 0.4) +
+  labs(title = "Densities of EBTA by default (default_1Y)",
+       x = "Values",
+       y = "Density",
+       color = "Defaults",
+       fill = "Defaults") +
+  theme_minimal()
+```
+
+### RETA
+
+```{r}
+ggplot(data, aes(x = RETA, color = factor(default_1Y), fill = factor(default_1Y))) +
+  geom_density(alpha = 0.4) +
+  labs(title = "Densité des valeurs selon defaults",
+       x = "Valeurs",
+       y = "Densité",
+       color = "Defaults",
+       fill = "Defaults") +
+  theme_minimal()
+```
+
+```{r}
+data$RETA_win <- Winsorize(data$RETA, val= quantile(data$RETA, probs = c(0.05, 0.999)))
+```
+
+```{r}
+ggplot(data, aes(x = RETA_win, color = factor(default_1Y), fill = factor(default_1Y))) +
+  geom_density(alpha = 0.4) +
+  labs(title = "Densities of RETA by default (default_1Y)",
+       x = "Values",
+       y = "Density",
+       color = "Defaults",
+       fill = "Defaults") +
+  theme_minimal()
+```
+
+### TLTA
+
+```{r}
+ggplot(data, aes(x = TLTA, color = factor(default_1Y), fill = factor(default_1Y))) +
+  geom_density(alpha = 0.4) +
+  labs(title = "Densité des valeurs selon defaults",
+       x = "Valeurs",
+       y = "Densité",
+       color = "Defaults",
+       fill = "Defaults") +
+  theme_minimal()
+```
+
+```{r}
+data$TLTA_win <- Winsorize(data$TLTA, val= quantile(data$TLTA, probs = c(0, 0.99)))
+```
+
+```{r}
+ggplot(data, aes(x = TLTA_win, color = factor(default_1Y), fill = factor(default_1Y))) +
+  geom_density(alpha = 0.4) +
+  labs(title = "Densities of TLTA by default (default_1Y)",
+       x = "Values",
+       y = "Density",
+       color = "Defaults",
+       fill = "Defaults") +
+  theme_minimal()
+```
+
+### SLTA
+
+```{r}
+ggplot(data, aes(x = SLTA, color = factor(default_1Y), fill = factor(default_1Y))) +
+  geom_density(alpha = 0.4) +
+  labs(title = "Densité des valeurs selon defaults",
+       x = "Valeurs",
+       y = "Densité",
+       color = "Defaults",
+       fill = "Defaults") +
+  theme_minimal()
+```
+
+```{r}
+data$SLTA_win <- Winsorize(data$SLTA, val= quantile(data$SLTA, probs = c(0.05, 0.99)))
+```
+
+```{r}
+ggplot(data, aes(x = SLTA_win, color = factor(default_1Y), fill = factor(default_1Y))) +
+  geom_density(alpha = 0.4) +
+  labs(title = "Densities of SLTA by default (default_1Y)",
+       x = "Values",
+       y = "Density",
+       color = "Defaults",
+       fill = "Defaults") +
+  theme_minimal()
+```
+
+## Variables defaults
+
+```{r}
+data %>% select(default_1Y, default_3Y, default_5Y) %>% summary()
+```
+
+```{r}
+data <- data %>%
+  mutate(final_default_date = as.Date(final_default_date, format = "%Y-%m-%d"))
+data$final_default_date %>% summary()
+```
+
+## Market variables
+
+The literature shows that adding market describing values helps to explain the default of the companies. We apply the same methods as for Altman's ratio: we impute by the mean, and then we winsorize the variable.
+
+### SIGMA
+
+```{r}
+ggplot(data, aes(x = SIGMA, color = factor(default_1Y), fill = factor(default_1Y))) +
+  geom_density(alpha = 0.4) +
+  labs(title = "Densities of SIGMA by default (default_1Y)",
+       color = "Defaults",
+       fill = "Defaults") +
+  theme_minimal()
+```
+
+```{r}
+data$SIGMA_win <- Winsorize(data$SIGMA, val= quantile(data$SIGMA, probs = c(0, 0.95)))
+```
+
+```{r}
+ggplot(data, aes(x = SIGMA_win, color = factor(default_1Y), fill = factor(default_1Y))) +
+  geom_density(alpha = 0.4) +
+  labs(x = "Values",
+       y = "Density",
+       color = "Defaults",
+       fill = "Defaults") +
+  theme_minimal()
+```
+
+### PAST RET
+
+```{r}
+ggplot(data, aes(x = PAST_RET, color = factor(default_1Y), fill = factor(default_1Y))) +
+  geom_density(alpha = 0.4) +
+  labs(title = "Density by default",
+       color = "Defaults",
+       fill = "Defaults") +
+  theme_minimal()
+```
+
+```{r}
+data$PAST_RET_win <- Winsorize(data$PAST_RET, val= quantile(data$PAST_RET, probs = c(0.1, 0.9)))
+```
+
+```{r}
+ggplot(data, aes(x = PAST_RET_win, color = factor(default_1Y), fill = factor(default_1Y))) +
+  geom_density(alpha = 0.4) +
+  labs(x = "Values",
+       y = "Density",
+       color = "Defaults",
+       fill = "Defaults") +
+  theme_minimal()
+```
+
+### RELATIVE_SIZE
+
+```{r}
+ggplot(data, aes(x = RELATIVE_SIZE, color = factor(default_1Y), fill = factor(default_1Y))) +
+  geom_density(alpha = 0.4) +
+  labs(title = "Density by default",
+       x = "Valeurs",
+       y = "Densité",
+       color = "Defaults",
+       fill = "Defaults") +
+  theme_minimal()
+```
+
+```{r}
+data$RELATIVE_SIZE_win <- Winsorize(data$RELATIVE_SIZE, val= quantile(data$RELATIVE_SIZE, probs = c(0.1, 0.9)))
+```
+
+```{r}
+ggplot(data, aes(x = RELATIVE_SIZE_win, color = factor(default_1Y), fill = factor(default_1Y))) +
+  geom_density(alpha = 0.4) +
+  labs(x = "Values",
+       y = "Density",
+       color = "Defaults",
+       fill = "Defaults") +
+  theme_minimal()
+```
+
+### market equity
+
+```{r}
+ggplot(data, aes(x = market_equity, color = factor(default_1Y), fill = factor(default_1Y))) +
+  geom_density(alpha = 0.4) +
+  labs(title = "Density by defaults",
+       color = "Defaults",
+       fill = "Defaults") +
+  theme_minimal()
+```
+
+```{r}
+data$market_equity_win <- Winsorize(data$market_equity, val= quantile(data$market_equity, probs = c(0, 0.999)))
+```
+
+```{r}
+ggplot(data, aes(x = market_equity_win, color = factor(default_1Y), fill = factor(default_1Y))) +
+  geom_density(alpha = 0.4) +
+  labs(x = "Values",
+       y = "Density",
+       color = "Defaults",
+       fill = "Defaults") +
+  theme_minimal()
+```
+
+## Export
+
+```{r}
+saveRDS(data, "data/df_winsorized.rds")
+```
+
+# Models
+
+```{r}
+data <- readRDS("data/df_winsorized.rds")
+data %>% select(default_1Y, default_3Y, default_5Y, WCTA, RETA, EBTA, TLTA, SLTA) %>% summary()
+```
+
+## Altman's ratio
+
+```{r}
+data_altman <- data %>% drop_na(WCTA, RETA, EBTA, TLTA, SLTA) #should not do anything
+data_altman %>% select(default_1Y, WCTA, RETA, EBTA, TLTA, SLTA) %>% summary()
+```
+
+```{r}
+altman_model <- glm(default_1Y ~ WCTA + RETA + EBTA + TLTA + SLTA, family="binomial", data = data_altman)
+summary(altman_model)
+```
+
+We compute ponderate weights.
+
+```{r}
+# Proportion
+prop <- prop.table(table(data_altman$default_1Y))
+data_altman <- data_altman %>%
+  mutate(weights_1Y = 1 / prop[match(default_1Y, names(prop))])
+
+# Normalize so the sum of the weights = 1
+data_altman$weights_prop <- data_altman$weights_1Y / mean(data_altman$weights_1Y)
+```
+
+```{r}
+altman_model_weights_prop <- glm(default_1Y ~ WCTA + RETA + EBTA + TLTA + SLTA, family="binomial", weights = weights_prop, data = data_altman)
+summary(altman_model_weights_prop)
+```
+
+All variables are significant at 5% except EBTA. We try the same model with winsorized variables.
+
+```{r}
+summary(altman_model)
+```
+
+```{r}
+summary(altman_model_weights_prop)
+```
+
+The two previous cells present the performance of Altman-type accounting models for one-year default prediction. We compare a baseline model estimated on raw firm-year data with a robust one that applies inverse-frequency weighting to address the class imbalance in default events.
+
+At the one-year horizon, the baseline model exhibits limited results, most ratios show weak marginal effects. Applying inverse-frequency weighting increases the statistical significance of the coefficients and improves the model. It highlights that accounting ratios can provide risk information for imminent default.
+
+## Winsorized variables
+
+```{r}
+data_altman_win <- data %>% drop_na(WCTA_win, RETA_win, EBTA_win, TLTA_win, SLTA_win)
+data_altman_win %>% select(default_1Y, default_3Y, default_5Y, WCTA_win, RETA_win, EBTA_win, TLTA_win, SLTA_win) %>% summary()
+```
+
+```{r}
+# Proportion
+prop <- prop.table(table(data_altman_win$default_1Y))
+data_altman_win <- data_altman_win %>%
+  mutate(weights_1Y = 1 / prop[match(default_1Y, names(prop))])
+
+# Normalize so the sum of the weights = 1
+data_altman_win$weights_prop <- data_altman_win$weights_1Y / mean(data_altman_win$weights_1Y)
+```
+
+```{r}
+altman_model_weights_prop <- glm(default_1Y ~ WCTA_win + RETA_win + EBTA_win + TLTA_win + SLTA_win, family="binomial", weights = weights_prop, data = data_altman_win)
+summary(altman_model_weights_prop)
+```
+
+Everything is significant but the model is less good than the winsorization so we try with default_3Y.
+
+```{r}
+# Proportion
+prop <- prop.table(table(data_altman_win$default_3Y))
+data_altman_win <- data_altman_win %>%
+  mutate(weights_3Y = 1 / prop[match(default_3Y, names(prop))])
+
+# Normalize so the sum of the weights = 1
+data_altman_win$weights_prop_3Y <- data_altman_win$weights_3Y / mean(data_altman_win$weights_3Y)
+```
+
+```{r}
+altman_model_weights_prop_3Y <- glm(default_3Y ~ WCTA_win + RETA_win + EBTA_win + TLTA_win + SLTA_win, family="binomial", weights = weights_prop, data = data_altman_win)
+summary(altman_model_weights_prop_3Y)
+```
+
+All coefficients are highly statistically significant. Relative to the non-winsorized specification, coefficient magnitudes are more stable and the overall fit improves substantially, as reflected by the reduction in the AIC. We try with default_5Y.
+
+```{r}
+# Calculer Proportion
+prop <- prop.table(table(data_altman_win$default_5Y))
+data_altman_win <- data_altman_win %>%
+  mutate(weights_5Y = 1 / prop[match(default_5Y, names(prop))])
+
+# Normalize so the sum of the weights = 1
+data_altman_win$weights_prop_5Y <- data_altman_win$weights_5Y / mean(data_altman_win$weights_5Y)
+```
+
+```{r}
+altman_model_weights_prop_5Y <- glm(default_5Y ~ WCTA_win + RETA_win + EBTA_win + TLTA_win + SLTA_win, family="binomial", weights = weights_prop, data = data_altman_win)
+summary(altman_model_weights_prop_5Y)
+```
+
+Everything is significant but the AIC is slightly less good in this case. Then, we keep default_3Y with the winsorized variables.
+
+Overall, it validates that inverse-frequency weighting improves ranking performance and it confirms that static scoring models are more informative over longer horizons but become less precise is too far on the time. Short-term default remains difficult to predict solely from balance-sheet information, pointing to the potential value of dynamic or market-based variables for short-horizon forecasting.
+
+## Others variables
+
+### Industries
+
+To explore the effect of the sector in default risk, we augment the three-year weighted Altman model with industry fixed effects (Table \ref{tab:altman_3y_industry}). Industries are represented as categorical indicators. The results indicate substantial variation in baseline default risk across sectors. For example, firms in the Utilities and Services sectors exhibit lower default probabilities relative to Construction sector, while Retail and Transportation show moderately higher relative risk. Manufacturing and Wholesale firms have negative coefficients, indicating lower default risk compared to the baseline.
+
+```{r}
+altman_model_industry <- glm(default_3Y ~ WCTA_win + RETA_win + EBTA_win + TLTA_win + SLTA_win + industry, family="binomial", weights = weights_prop_3Y, data = data_altman_win)
+summary(altman_model_industry)
+```
+
+All industry coefficients are highly statistically significant, highlighting that sector-specific factors play a crucial role in default prediction. These findings align with prior literature (Chava, 2004), suggesting that incorporating industry effects improves the discriminatory power of accounting-based models by capturing systematic sectoral risk not explained by firm-level financial ratios alone.
+
+### Shumway's variables
+
+```{r}
+altman_model_shumway <- glm(default_3Y ~ WCTA_win + RETA_win + EBTA_win + TLTA_win + SLTA_win + industry + SIGMA + PAST_RET + RELATIVE_SIZE, family="binomial", weights = weights_prop_3Y, data = data_altman_win)
+summary(altman_model_shumway)
+```
+
+Everything is significant and with a better AIC. We try to use the winsorized Shumway variables.
+
+```{r}
+altman_model_shumway_win <- glm(default_3Y ~ WCTA_win + RETA_win + EBTA_win + TLTA_win + SLTA_win + industry + SIGMA_win + PAST_RET_win + RELATIVE_SIZE_win, family="binomial", weights = weights_prop_3Y, data = data_altman_win)
+summary(altman_model_shumway_win)
+```
+
+The model extends the robust three-year default model by adding market-based variables following Shumway (2001). The inclusion of volatility, past stock returns, and relative firm size leads to a substantial improvement in model fit, as reflected by a reduction in the AIC relative to accounting-only specifications. Consistent with the hazard-model literature, market variables exhibit strong and economically meaningful effects. Higher volatility significantly increases default risk, while higher past stock returns and larger relative market capitalization are associated with lower default probabilities. In particular, the coefficients and the significance of these market variables dominate those of the traditional accounting ratios. Industry effects persist after controlling for market information, confirming the presence of structural differences in baseline default risk across sectors. Overall, these results confirm that market-based variables capture information about firm distress that is not fully reflected in accounting data.
+
+The AIC is better so we keep this last model. We try a LASSO to see if some variables are not necessary and then will have a coefficient push to 0.
+
+## LASSO
+
+```{r}
+formula_lasso <- default_3Y ~ WCTA_win + RETA_win + EBTA_win + TLTA_win + SLTA_win + industry + SIGMA_win + PAST_RET_win + RELATIVE_SIZE_win
+data_LASSO <- model.matrix(formula_lasso, data = data_altman_win)[,-1] #take out the intercept
+```
+
+```{r}
+altman_model_shumway_lasso <- cv.glmnet(
+    x = data_LASSO,
+    y = data_altman_win$default_3Y,
+    alpha = 1,
+    family = "binomial",
+    weights = data_altman_win$weights_prop_3Y
+)
+```
+
+```{r}
+plot(altman_model_shumway_lasso)
+```
+
+```{r}
+lambda_best <- altman_model_shumway_lasso$lambda.1se
+coeff_lasso <- coef(altman_model_shumway_lasso, s = lambda_best)
+coeff_lasso
+```
+
+SLTA is not included in the model. This corresponds to the literature. Indeed, alone SLTA is not significant. It becomes significant with the other Altman's ratios but is useless when we add the market variables showed by Shumway.
+
+Manufacturing is not significant but it can be because it is very simialr to the referent industry. We keep the Manufacturing industry because all the other ones are significant.
+
+Relative_size is the one variable that it has a coefficient equals to 0. Then, this variable is not useful in the model and so we should take it off.
+
+# Metrics
+
+\textbf{the Metric: CAP Curve} Crucially, Falkenstein et al. argue against using standard accuracy metrics like the ROC curve for portfolios with very few defaults. Instead, they utilize the \textbf{Cumulative Accuracy Profile (CAP)}.
+
+The CAP curve plots the cumulative percentage of defaults captured (Y-axis) against the cumulative percentage of borrowers sorted from riskiest to safest (X-axis). A "perfect" model would capture 100% of defaults by checking only the percentage of the population equal to the default rate, whereas a random model follows a 45-degree line. This metric is specifically chosen to assess how well the model concentrates "bad" loans at the very top of the risk ranking.
+
+## ROC Curve
+
+### Data preparation
+
+We split the data into training and testing sets. It is done such that there is no future period in the training compared to the test set. It means that we do a first split and then we delete from the train set the firm-year observations if there is an observation of the same companies in a previous year in the test set. For example, if the train set contains the company A in 2000 and the test set contains the company A in 1990. The company A will be deleted from the train set. The test set is not modified. However, if the train set contains the company B in 2000 and the test set contains the same company in 2010. Both sets stay equal. We also use a k-fold cross-validation to consolidate the results. We choose $k=10$. This means that we draw 10 train/test sets. Then, we calculate again four of the previous models to compare them with different metrics.
+
+```{r}
+set.seed(123)
+
+folds_indices <- createFolds(data_altman_win$default_1Y, k = 10, list = FALSE)
+data_altman_win$fold_id <- folds_indices
+
+resultats_cv <- list()
+for (k in 1:10) {
+  
+  test_set_raw  <- data_altman_win %>% filter(fold_id == k)
+  train_set_raw <- data_altman_win %>% filter(fold_id != k)
+  
+  #time constraint
+  
+# B. Application de la contrainte temporelle par entreprise
+  # "Pour une entreprise donnée, le train ne doit pas contenir de données 
+  # postérieures ou égales à la plus ancienne donnée de cette entreprise dans le test."
+  
+  # find the first date in test
+  cutoff_dates <- test_set_raw %>%
+    group_by(gvkey) %>% 
+    summarise(min_test_year = min(fyear), .groups = 'drop')
+  
+  # filter the train
+  train_set_clean <- train_set_raw %>%
+    left_join(cutoff_dates, by = "gvkey") %>%
+    filter(
+      # Case 1: The company is not in the test, we keep all observations
+      is.na(min_test_year) | 
+      # Case 2: The company is in the test, we take all observations in the past
+      fyear < min_test_year
+    ) %>%
+    select(-min_test_year)
+  
+  # Models
+  
+  altman_model_winsorized_1Y_2 <- glm(default_1Y ~ WCTA_win + RETA_win + EBTA_win + TLTA_win + SLTA_win,
+                                    family="binomial", weights = weights_prop, data = train_set_clean)
+  altman_model_winsorized_3Y_2 <- glm(default_3Y ~ WCTA_win + RETA_win + EBTA_win + TLTA_win + SLTA_win,
+                                    family="binomial", weights = weights_prop_3Y, data = train_set_clean)
+  altman_model_industry_2 <- glm(default_3Y ~ WCTA_win + RETA_win + EBTA_win + TLTA_win + SLTA_win +
+                                 industry, family="binomial", weights = weights_prop_3Y, data =
+                                train_set_clean)
+  altman_model_shumway_2 <- glm(default_3Y ~ WCTA_win + RETA_win + EBTA_win + TLTA_win + SLTA_win +
+                                industry + SIGMA + PAST_RET + RELATIVE_SIZE, family="binomial", weights =
+                                weights_prop_3Y, data = train_set_clean)
+  
+  # Prediction
+  pred_prob_winso_2 <- predict(altman_model_winsorized_1Y_2, newdata = test_set_raw, type = "response")
+  pred_prob_winso_3Y_2 <- predict(altman_model_winsorized_3Y_2, newdata = test_set_raw, type = "response")
+  pred_prob_industry_2 <- predict(altman_model_industry_2, newdata = test_set_raw, type = "response")
+  pred_prob_shumway_2 <- predict(altman_model_shumway_2, newdata = test_set_raw, type = "response")
+  
+  fold_res <- test_set_raw %>%
+    select(gvkey, fyear, default_1Y, default_3Y) %>%
+    mutate(
+      fold = k,
+      pred_prob_winso_2 = pred_prob_winso_2,
+      pred_prob_winso_3Y_2 = pred_prob_winso_3Y_2,
+      pred_prob_industry_2 = pred_prob_industry_2, 
+      pred_prob_shumway_2 = pred_prob_shumway_2
+    )
+  
+  resultats_cv[[k]] <- fold_res
+  
+  cat("Fold", k, ": Train size =", nrow(train_set_clean), "/ Test size =", nrow(test_set_raw), "\n")
+}
+
+final_results <- bind_rows(resultats_cv)
+```
+
+```{r}
+final_results
+```
+
+```{r}
+roc_winso <- roc(final_results$default_1Y, final_results$pred_prob_winso_2)
+roc_winso_3Y <- roc(final_results$default_3Y, final_results$pred_prob_winso_3Y_2)
+roc_industry <- roc(final_results$default_3Y, final_results$pred_prob_industry_2)
+roc_shumway <- roc(final_results$default_3Y, final_results$pred_prob_shumway_2)
+
+
+auc_2 <- cbind(roc_winso$auc, roc_winso_3Y$auc, roc_industry$auc, roc_shumway$auc)
+auc_2
+```
+
+### ROC Curve
+
+```{r}
+roc_list <- list(
+  "default_1Y - Winsorized" = roc_winso,
+  "default_3Y - Winsorized" = roc_winso_3Y,
+  "default_3Y Winso + industry" = roc_industry,
+  "default_3Y - Winso + ind + shumway" = roc_shumway
+)
+```
+
+```{r}
+ggroc(roc_list, legacy.axes = TRUE, size = 1) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "grey50") +
+  scale_color_manual(
+    values = c(
+      "default_1Y - Winsorized" = "darkorange",
+      "default_3Y - Winsorized" = "lightblue",
+      "default_3Y Winso + industry" = "coral",
+      "default_3Y - Winso + ind + shumway" = "lightgreen"
+    ),
+    
+    labels = c(
+      "default_1Y - Winsorized" = "default_1Y\nWinsorized",
+      "default_3Y - Winsorized" = "default_3Y\nWinsorized",
+      "default_3Y Winso + industry" = "default_3Y Winso\n+ industry",
+      "default_3Y - Winso + ind + shumway" = "default_3Y Winso\n+ ind + shumway"
+    )
+  ) +
+  labs(
+    title = "ROC curve Admissions",
+    x = "1 - Specificity (False Positive Rate)",
+    y = "Sensitivity (True Positive Rate)",
+    color = "Models"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",
+    legend.key.height = unit(1, "cm") 
+  )
+```
+
+We test a first metrics which usual in scoring procedures. In the ROC curve, we can compare the winzorized models with just the Altman's ratio, with a one-year horizon (\textit{default\_1Y - Winsorized}) and with a three-year horizon (\textit{default\_3Y - Winsorized}). We also have the model that add the industry (\textit{default\3Y - Winso + industry} and the one that adds the market variables (\textit{default\3Y - Winso + industry + shumway}). The best model is Shumway one, the one with all the market variables which corresponds to the literature. However, the ROC curve uses the false positives on the x-axis but as the number of companies is very high, the rate of false positives will always be small. The CAP curve quite solve this problem because it focuses on the recall and so, on the ability to put default on the low scores.
+
+# CAP Curve
+
+```{r}
+data_res <- test_set_raw
+data_res$winso <- pred_prob_winso_2
+data_res$winso_3Y <- pred_prob_winso_3Y_2
+data_res$industry <- pred_prob_industry_2
+data_res$shumway <- pred_prob_shumway_2
+```
+
+```{r}
+#We create a function to do the CAP 
+calculate_cap <- function(data, score_var, default_var) {
+  data <- data %>%
+    rename(score = {{ score_var }},
+           default = {{ default_var }})
+
+  # Sort the companies in terms of score
+  data_sorted <- data %>%
+    arrange(desc(score)) %>%
+    mutate(
+      total_defaults = sum(default),
+      total_companies = n()
+    )
+
+  cap_data <- data_sorted %>%
+    mutate(
+      cumulative_defaults = cumsum(default),
+      cumulative_companies = row_number()
+    ) %>%
+    # Percentage
+    mutate(
+      x_axis = cumulative_companies / total_companies,        # % of selected companies (x)
+      y_axis = cumulative_defaults / total_defaults           # % of captured scores (y)
+    ) %>%
+    select(x_axis, y_axis)
+
+  cap_final <- bind_rows(
+    tibble(x_axis = 0, y_axis = 0),
+    cap_data,
+    tibble(x_axis = 1, y_axis = 1)
+  ) %>%
+    distinct()
+
+  return(cap_final)
+}
+
+
+cap_winso <- calculate_cap(data = data_res, score_var = winso, default_var = default_1Y) %>% mutate(Model = "winso")
+cap_winso_3Y <- calculate_cap(data_res, winso_3Y, default_3Y) %>% mutate(Model = "winso_3Y")
+cap_industry <- calculate_cap(data_res, industry, default_3Y) %>% mutate(Model = "industry")
+cap_shumway <- calculate_cap(data_res, shumway, default_3Y) %>% mutate(Model = "shumway")
+
+cap_results <- bind_rows(cap_winso, cap_winso_3Y, cap_industry, cap_shumway)
+
+prop_defaults <- sum(test_set_raw$default_1Y) / nrow(test_set_raw)
+
+ggplot(cap_results, aes(x = x_axis, y = y_axis, color = Model)) +
+  geom_line(linewidth = 1.2) +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "grey50") +
+  geom_segment(
+    aes(x = 0, y = 0, xend = prop_defaults, yend = 1),
+    color = "darkred", linetype = "dotted", inherit.aes = FALSE
+  ) +
+  geom_segment(
+    aes(x = prop_defaults, y = 1, xend = 1, yend = 1),
+    color = "darkred", linetype = "dotted", inherit.aes = FALSE
+  ) +
+  scale_x_continuous(labels = percent, name = "% of selected companies (of the high risk)") +
+  scale_y_continuous(labels = percent, name = "% cumulative defaults captured") +
+  labs(
+    title = "CAP curves of the models"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "top")
+```
+
+The CAP curve is similar to the ROC curve. The best model is the one with the highest area under the curve. The highest area is the shumway model is all the market variables. This can be confirmed by the AUC ratio defined as $$\frac{AUC - AUC_{random}}{AUC_{perfect} - AUC}$$ with the AUC the ara under the curve of the model, the $AUC_{random}$ the area under the curve of a model that will be random and then has 0.5 has area under the curve and $AUC_{perfect}$ is 1 and represents the best model.
+
+# AUC ratios
+
+```{r}
+auc_2
+```
+
+```{r}
+auc_perfect <- 1
+auc_random <- 0.5
+ratio_auc_2 <- (auc_2 - auc_random) / (auc_perfect - auc_2)
+ratio_auc_2
+```
+
+The AUC ratios confirm the CAP curve: the best model is the one with all the variables.
+
+# Score
+
+```{r}
+score_shumway <- final_results %>% select(default_1Y, pred_prob_shumway_2) %>% arrange(pred_prob_shumway_2)
+
+ggplot(score_shumway, aes(x = pred_prob_shumway_2, color = factor(default_1Y), fill = factor(default_1Y))) +
+  geom_density(alpha = 0.4) +
+  labs(x = "Values",
+       y = "Density",
+       color = "Defaults",
+       fill = "Defaults") +
+  theme_minimal()
+```
+
+```{r}
+score_shumway <- final_results %>% select(default_3Y, pred_prob_shumway_2) %>% arrange(pred_prob_shumway_2)
+
+ggplot(score_shumway, aes(x = pred_prob_shumway_2, color = factor(default_3Y), fill = factor(default_3Y))) +
+  geom_density(alpha = 0.4) +
+  labs(x = "Values",
+       y = "Density",
+       color = "Defaults",
+       fill = "Defaults") +
+  theme_minimal()
+```
+
+# References
+
+-   **Altman, E. I. (1968).** Financial Ratios, Discriminant Analysis and the Prediction of Corporate Bankruptcy. *The Journal of Finance*, 23(4), 589–609.
+
+-   **Altman, E. I., Margaine, M., Schlosser, M., & Vernimmen, P. (1974).** Financial and Statistical Analysis for Commercial Loan Evaluation: A French Experience. *The Journal of Financial and Quantitative Analysis*, 9(2), 195–211.
+
+-   **Ayash, B., Bednarek, Z., & Bordeman, A. (2025).** Compustat Financial Statement Data Articulation: A Simplified Approach. *Journal of Financial Reporting*, 1–18. [https://doi.org/10.2308/jfr-2021-020](https://www.google.com/search?q=https://doi.org/10.2308/jfr-2021-020)
+
+-   **Bardos, M. (2007).** What is at stake in the construction and use of credit scores? *Computational Economics*, 29(2), 159–172. [https://doi.org/10.1007/s10614-006-9083-x](https://www.google.com/search?q=https://doi.org/10.1007/s10614-006-9083-x)
+
+-   **Chava, S., & Jarrow, R. A. (2004).** Bankruptcy Prediction with Industry Effects. *Review of Finance*, 8, 537–569.
+
+-   **Falkenstein, E., Boral, A., & Carty, L. V. (2000).** RiskCalc™ for Private Companies: Moody's Default Model. *Rating Methodology*, Moody's Investors Service.
+
+-   **Shumway, T. (2001).** Forecasting Bankruptcy More Accurately: A Simple Hazard Model. *The Journal of Business*, 74(1), 101–124.
